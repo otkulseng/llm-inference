@@ -11,3 +11,5 @@ gold/
 
 !assets/*/token.model
 !assets/*/tokenizer.model
+
+.setup-env.sh
