@@ -194,9 +194,25 @@ vector<int> BPETokenizer::encode_chunk(const string &s,
     if (enable_merge) {
         while (true) {
             int best = INT_MAX;
-            throw runtime_error("Not implemented: you need to implement the BPE merge algorithm here");
+            int best_idx = -1;
+            // throw runtime_error("Not implemented: you need to implement the BPE merge algorithm here");
             // YOUR CODE HERE
             // Find the best pair to merge using pair_rank function
+            for (int i = 1; i < toks.size(); i++) {
+                int new_val = pair_rank(toks[i-1], toks[i]);
+                if (new_val < best) {
+                    best = new_val;
+                    best_idx = i;
+                }
+            }
+            if (best == INT_MAX) {
+                // No matches found.
+                break;
+            }
+
+            // Merge best_idx-1 and best_idx
+            toks[best_idx-1] = toks[best_idx-1] + toks[best_idx];
+            toks.erase(toks.begin() + best_idx);
         }
     }
 
