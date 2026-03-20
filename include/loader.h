@@ -12,6 +12,13 @@
 
 enum class DumpFloatType { FP16, BF16, FP32 };
 
+struct BlobHeader {
+  uint32_t dtype;
+  uint64_t rows;
+  uint64_t cols;
+  uint64_t nbytes;
+};
+
 class LlamaDumpLoader {
   public:
     DumpFloatType float_type;

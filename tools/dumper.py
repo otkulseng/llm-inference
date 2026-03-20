@@ -46,7 +46,7 @@ def write_tensor(path: str | Path, t: torch.Tensor) -> None:
         f.write(struct.pack("<IQQQ", dtype_code, rows, cols, nbytes))
 
         # raw bytes
-        arr.tofile(f)  # binary when sep=""
+        arr.tofile(f)
 
 root = Path("./assets/llama3")
 store = root / "blobs"
