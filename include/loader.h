@@ -42,9 +42,21 @@ class LlamaDumpLoader {
     // There is a memory leak here
     float_t *get_embeddings(const std::vector<int> &token_ids);
 
-  
+
     float_t *load_1d(const std::string &dump_file, const size_t &dim0);
     float_t *load_2d(const std::string &dump_file, const size_t &dim0, const size_t &dim1);
 
+  private:
+    // mmap state for the embeddings table
+    void *emb_mapped = nullptr;
+    size_t emb_mapped_size = 0;
+    BlobHeader emb_header = {};
 
+    // Helper: mmap a blob file and parse its header
+    void *mmap_blob(const std::string &path, size_t &out_mapped_size,
+                    BlobHeader &out_header);
+
+    // Helper: convert raw on-disk data to float_t
+    void convert_to_float(const void *src, float_t *dst, size_t count,
+                          uint32_t dtype_code);
 };
