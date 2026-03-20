@@ -1,6 +1,8 @@
 
 
 #include "test_api.h"
+#include "config.h"
+#include "loader.h"
 #include "tokenizer.h"
 #include <iostream>
 
@@ -9,7 +11,7 @@ vector<int> TestAPI::tokenize(string input) {
     // You can use the tokenizer you implemented in src/tokenizer_bpe.cpp and
     // include the header file here. Read the project description for more
     // information.
-    BPETokenizer tok("./assets/llama3/tokenizer.model");
+    BPETokenizer tok(TOKENIZER_PATH);
     std::cout << input << std::endl;
 
     auto res = tok.encode(input);
@@ -24,8 +26,14 @@ vector<int> TestAPI::tokenize(string input) {
 }
 
 vector<float> TestAPI::get_embeddings(vector<int> token_ids) {
-    throw runtime_error("Not implemented: you need to implement the "
-                        "get_embeddings function here");
+    LlamaDumpLoader loader(DumpFloatType::BF16);
+    loader.load_embeddings(EMBEDDING_MATRIX_PATH, EMBEDDING_DIM);
+
+    float_t *raw = loader.get_embeddings(token_ids);
+    size_t total = token_ids.size() * EMBEDDING_DIM;
+    vector<float> result(raw, raw + total);
+    delete[] raw;
+    return result;
 }
 
 vector<float> TestAPI::matmul(const vector<float> &A, const vector<float> &B,
