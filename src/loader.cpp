@@ -128,6 +128,9 @@ size_t LlamaDumpLoader::vocab_size(const std::string &dump_path,
                                     int embedding_dim) {
     if (!emb_mapped) {
         emb_mapped = mmap_blob(dump_path, emb_mapped_size, emb_header);
+        printf("sizeof(BlobHeader) = %zu\n", sizeof(BlobHeader));
+        printf("dtype=%u rows=%lu cols=%lu nbytes=%lu\n",
+               emb_header.dtype, emb_header.rows, emb_header.cols, emb_header.nbytes);
         assert(emb_header.cols == static_cast<uint64_t>(embedding_dim));
     }
     return emb_header.rows;

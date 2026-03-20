@@ -4,6 +4,7 @@
 #include "config.h"
 #include "loader.h"
 #include "tokenizer.h"
+#include "kernels.cuh"
 #include <iostream>
 
 vector<int> TestAPI::tokenize(string input) {
@@ -26,7 +27,7 @@ vector<int> TestAPI::tokenize(string input) {
 }
 
 vector<float> TestAPI::get_embeddings(vector<int> token_ids) {
-    LlamaDumpLoader loader(DumpFloatType::BF16);
+    LlamaDumpLoader loader(DumpFloatType::FP32);
     loader.load_embeddings(EMBEDDING_MATRIX_PATH, EMBEDDING_DIM);
 
     float_t *raw = loader.get_embeddings(token_ids);
@@ -38,6 +39,31 @@ vector<float> TestAPI::get_embeddings(vector<int> token_ids) {
 
 vector<float> TestAPI::matmul(const vector<float> &A, const vector<float> &B,
                               int M, int K, int N) {
-    throw runtime_error("Not implemented: you need to implement the "
-                        "matmul function here");
+    size_t size_A = M * K * sizeof(float);
+    size_t size_B = K * N * sizeof(float);
+    size_t size_C = M * N * sizeof(float);
+
+    // Allocate device memory
+    float *d_A, *d_B, *d_C;
+    cudaMalloc(&d_A, size_A);
+    cudaMalloc(&d_B, size_B);
+    cudaMalloc(&d_C, size_C);
+
+    // Copy inputs to device
+    cudaMemcpy(d_A, A.data(), size_A, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_B, B.data(), size_B, cudaMemcpyHostToDevice);
+
+    // Launch kernel
+    launch_matmul(d_A, d_B, d_C, M, K, N);
+
+    // Copy result back to host
+    vector<float> C(M * N);
+    cudaMemcpy(C.data(), d_C, size_C, cudaMemcpyDeviceToHost);
+
+    // Free device memory
+    cudaFree(d_A);
+    cudaFree(d_B);
+    cudaFree(d_C);
+
+    return C;
 }

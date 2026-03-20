@@ -2,8 +2,11 @@
 # You may change it and we use it to build your code.
 # DO NOT CHANGE RECIPE FOR TEST RELATED TARGETS 
 CXX := g++
+NVCC := nvcc
 CXXFLAGS := -std=c++17 -Wall -Wextra -pedantic -MMD -MP
-LDFLAGS :=
+NVCCFLAGS := -std=c++17
+LDFLAGS := -lcudart
+KERNEL_DIR := kernel
 BUILD ?= release
 
 ifeq ($(BUILD),debug)
@@ -20,7 +23,7 @@ TARGET := llm
 SOURCES := main.cpp $(SRC_DIR)/tokenizer_bpe.cpp 
 OBJECTS := $(BUILD_DIR)/main.o $(BUILD_DIR)/tokenizer_bpe.o
 DEPS := $(OBJECTS:.o=.d)
-INCLUDES := -I$(INC_DIR) -I.
+INCLUDES := -I$(INC_DIR) -I. -I$(KERNEL_DIR)
 
 
 all: $(BIN_DIR)/$(TARGET)
@@ -32,6 +35,8 @@ $(BUILD_DIR)/tokenizer_bpe.o: $(SRC_DIR)/tokenizer_bpe.cpp | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
 $(BUILD_DIR)/loader.o: $(SRC_DIR)/loader.cpp | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+$(BUILD_DIR)/matmul.o: $(KERNEL_DIR)/matmul.cu | $(BUILD_DIR)
+	$(NVCC) $(NVCCFLAGS) $(INCLUDES) -c $< -o $@
 $(BUILD_DIR) $(BIN_DIR):
 	mkdir -p $@
 
@@ -53,28 +58,28 @@ run: all
 
 .PHONY: tests
 
-TEST_OBJECTS := $(BUILD_DIR)/test.o $(BUILD_DIR)/test_api.o $(BUILD_DIR)/tokenizer_bpe.o $(BUILD_DIR)/loader.o
+TEST_OBJECTS := $(BUILD_DIR)/test.o $(BUILD_DIR)/test_api.o $(BUILD_DIR)/tokenizer_bpe.o $(BUILD_DIR)/loader.o $(BUILD_DIR)/matmul.o
 
 tests: $(BIN_DIR)/tests
 
 $(BIN_DIR)/tests: $(TEST_OBJECTS) | $(BIN_DIR)
-	$(CXX) $(TEST_OBJECTS) -o $@ $(LDFLAGS)
+	$(NVCC) $(TEST_OBJECTS) -o $@ $(LDFLAGS)
 
 $(BUILD_DIR)/test.o: tests/test.cpp | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
 
 $(BUILD_DIR)/test_api.o: tests/test_api.cpp | $(BUILD_DIR)
-	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+	$(NVCC) $(NVCCFLAGS) $(INCLUDES) -c $< -o $@
 
 
 .PHONY: my_tests
 
-MY_TEST_OBJECTS := $(BUILD_DIR)/my_tests.o $(BUILD_DIR)/test_api.o $(BUILD_DIR)/tokenizer_bpe.o $(BUILD_DIR)/loader.o
+MY_TEST_OBJECTS := $(BUILD_DIR)/my_tests.o $(BUILD_DIR)/test_api.o $(BUILD_DIR)/tokenizer_bpe.o $(BUILD_DIR)/loader.o $(BUILD_DIR)/matmul.o
 
 my_tests: $(BIN_DIR)/my_tests
 
 $(BIN_DIR)/my_tests: $(MY_TEST_OBJECTS) | $(BIN_DIR)
-	$(CXX) $(MY_TEST_OBJECTS) -o $@ $(LDFLAGS)
+	$(NVCC) $(MY_TEST_OBJECTS) -o $@ $(LDFLAGS)
 
 $(BUILD_DIR)/my_tests.o: tests/my_tests.cpp | $(BUILD_DIR)
-	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+	$(NVCC) $(NVCCFLAGS) $(INCLUDES) -c $< -o $@

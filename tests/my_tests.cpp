@@ -1,5 +1,6 @@
 #include "test_api.h"
 #include "config.h"
+#include <cmath>
 #include <iostream>
 
 const float EPSILON = 1e-2;
@@ -38,6 +39,90 @@ bool test_embeddings() {
     return true;
 }
 
+bool test_matmul_small() {
+    // A = [1, 2]    B = [5, 6]    C = A*B = [19, 22]
+    //     [3, 4]        [7, 8]              [43, 50]
+    TestAPI api;
+
+    vector<float> A = {1, 2, 3, 4};
+    vector<float> B = {5, 6, 7, 8};
+    vector<float> C = api.matmul(A, B, 2, 2, 2);
+
+    vector<float> expected = {19, 22, 43, 50};
+
+    if (C.size() != expected.size()) {
+        std::cout << "Size mismatch: expected " << expected.size()
+                  << " got " << C.size() << "\n";
+        return false;
+    }
+
+    for (size_t i = 0; i < C.size(); i++) {
+        if (std::abs(C[i] - expected[i]) > EPSILON) {
+            std::cout << "Mismatch at [" << i << "]: expected " << expected[i]
+                      << " got " << C[i] << "\n";
+            return false;
+        }
+    }
+    return true;
+}
+
+bool test_matmul_nonsquare() {
+    // A[2,3] * B[3,2] = C[2,2]
+    // A = [1, 2, 3]    B = [1, 4]    C = [14, 32]
+    //     [4, 5, 6]        [2, 5]        [32, 77]
+    //                      [3, 6]
+    TestAPI api;
+
+    vector<float> A = {1, 2, 3, 4, 5, 6};
+    vector<float> B = {1, 4, 2, 5, 3, 6};
+    vector<float> C = api.matmul(A, B, 2, 3, 2);
+
+    vector<float> expected = {14, 32, 32, 77};
+
+    for (size_t i = 0; i < C.size(); i++) {
+        if (std::abs(C[i] - expected[i]) > EPSILON) {
+            std::cout << "Mismatch at [" << i << "]: expected " << expected[i]
+                      << " got " << C[i] << "\n";
+            return false;
+        }
+    }
+    return true;
+}
+
+bool test_matmul_large() {
+    // Test with dimensions that aren't multiples of TILE_SIZE (32)
+    // A[65,33] * B[33,17] = C[65,17]
+    // Fill with simple pattern: A[i][j] = i+j, B[i][j] = i-j
+    int M = 65, K = 33, N = 17;
+    TestAPI api;
+
+    vector<float> A(M * K), B(K * N);
+    for (int i = 0; i < M; i++)
+        for (int j = 0; j < K; j++)
+            A[i * K + j] = (float)(i + j);
+    for (int i = 0; i < K; i++)
+        for (int j = 0; j < N; j++)
+            B[i * N + j] = (float)(i - j);
+
+    // CPU reference
+    vector<float> expected(M * N, 0.0f);
+    for (int i = 0; i < M; i++)
+        for (int j = 0; j < N; j++)
+            for (int k = 0; k < K; k++)
+                expected[i * N + j] += A[i * K + k] * B[k * N + j];
+
+    vector<float> C = api.matmul(A, B, M, K, N);
+
+    for (int i = 0; i < M * N; i++) {
+        if (std::abs(C[i] - expected[i]) > EPSILON) {
+            std::cout << "Mismatch at [" << i << "]: expected " << expected[i]
+                      << " got " << C[i] << "\n";
+            return false;
+        }
+    }
+    return true;
+}
+
 int main() {
     const char *GREEN = "\033[32m";
     const char *RED = "\033[31m";
@@ -48,6 +133,9 @@ int main() {
         bool (*fn)();
     } tests[] = {
         {"test_embeddings", test_embeddings},
+        {"test_matmul_small", test_matmul_small},
+        {"test_matmul_nonsquare", test_matmul_nonsquare},
+        {"test_matmul_large", test_matmul_large},
     };
 
     int passed = 0, total = 0;
