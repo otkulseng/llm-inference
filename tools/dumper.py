@@ -43,7 +43,7 @@ def write_tensor(path: str | Path, t: torch.Tensor) -> None:
 
         nbytes = arr.nbytes
 
-        f.write(struct.pack("<IQQQ", dtype_code, rows, cols, nbytes))
+        f.write(struct.pack("<QQQQ", dtype_code, rows, cols, nbytes))
 
         # raw bytes
         arr.tofile(f)
