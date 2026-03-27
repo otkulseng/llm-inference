@@ -52,7 +52,6 @@ static float bf16_to_float(uint16_t bf) {
     return result;
 }
 
-// --- LlamaDumpLoader implementation ---------------------------------------
 
 LlamaDumpLoader::LlamaDumpLoader(DumpFloatType float_type)
     : float_type(float_type) {}
