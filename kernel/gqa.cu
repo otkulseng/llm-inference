@@ -3,13 +3,21 @@
 // Grouped Query Attention with causal mask and numerically stable softmax,
 // fused into one kernel per (head, query) per part2.pdf §3.1-3.2.
 //
-// Layout: Q is (n_heads, s, h_d), K and V are (n_kv_heads, s, h_d), all flat
-// row-major. Output is flat (s, n_heads * h_d) — head outputs concatenated
-// along the feature axis per token. KV head index for query head i is
-// g = i / (n_heads / n_kv_heads), so each group of (n_heads / n_kv_heads)
-// query heads shares one K head and one V head.
+// Buffer layout (single, hardcoded):
+//   Q : flat (s, n_heads,    h_d) row-major
+//   K : flat (s, n_kv_heads, h_d) row-major
+//   V : flat (s, n_kv_heads, h_d) row-major
+//   O : flat (s, n_heads,    h_d) row-major  (= concat-of-heads per token)
 //
-// One block per (head, query position p). Inside a block the score row
+// This is the natural post-matmul layout — decoder_block consumes it directly
+// with no data movement (part2.pdf §3.1: "this is a logical reshape ... and
+// requires no data movement"). Test 12's fixture is in (n, s, h_d); the test
+// wrapper host-transposes the inputs once.
+//
+// KV head index for query head i: g = i / (n_heads / n_kv_heads). Each group
+// of (n_heads / n_kv_heads) query heads shares one K head and one V head.
+//
+// One block per (head_i, query position p). Inside a block the score row
 // scores[0..s) lives in shared memory and is reused as the unnormalized
 // alpha row — it never touches HBM. Reduction stages mirror the PMPP-style
 // tree reduction in rmsnorm.cu.
@@ -31,11 +39,9 @@ __global__ void gqa_attention_kernel(const float *Q, const float *K,
     const int g      = head_i / (n_heads / n_kv_heads);
     const float scale = rsqrtf((float)h_d);
 
-    const float *q_row = Q + head_i * s * h_d + p * h_d;
-    const float *k_head = K + g * s * h_d;
-    const float *v_head = V + g * s * h_d;
+    const float *q_row = Q + p * (n_heads * h_d) + head_i * h_d;
 
-    // Stage 0: stage Q[head_i, p, :] into shared memory.
+    // Stage 0: stage Q[p, head_i, :] into shared memory.
     for (int d = tid; d < h_d; d += BLOCK_SIZE) {
         q_shared[d] = q_row[d];
     }
@@ -47,7 +53,7 @@ __global__ void gqa_attention_kernel(const float *Q, const float *K,
         if (q > p) {
             scores[q] = -1.0e6f;
         } else {
-            const float *k_row = k_head + q * h_d;
+            const float *k_row = K + q * (n_kv_heads * h_d) + g * h_d;
             float dot = 0.0f;
             for (int d = 0; d < h_d; ++d) {
                 dot += q_shared[d] * k_row[d];
@@ -96,14 +102,14 @@ __global__ void gqa_attention_kernel(const float *Q, const float *K,
     if (tid == 0) row_sum = reduce_scratch[0];
     __syncthreads();
 
-    // Stage 4: weighted sum O[p, head_i, d] = Σ_q (scores[q] / row_sum) · V[g, q, d].
-    // Output layout is (s, n_heads, h_d) row-major to match the test fixture.
+    // Stage 4: weighted sum O[p, head_i, d] = Σ_q (scores[q] / row_sum) · V[q, g, d].
     const float inv_sum = 1.0f / row_sum;
     float *o_row = O + p * (n_heads * h_d) + head_i * h_d;
     for (int d = tid; d < h_d; d += BLOCK_SIZE) {
         float acc = 0.0f;
         for (int q = 0; q <= p; ++q) {
-            acc += scores[q] * v_head[q * h_d + d];
+            const float *v_row = V + q * (n_kv_heads * h_d) + g * h_d;
+            acc += scores[q] * v_row[d];
         }
         o_row[d] = acc * inv_sum;
     }

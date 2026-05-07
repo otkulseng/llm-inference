@@ -26,16 +26,15 @@ void launch_residual_add(const float *d_a, const float *d_b, float *d_y, int n);
 // Elementwise SiLU(gate) * up: y[i] = (gate[i] / (1 + exp(-gate[i]))) * up[i].
 void launch_silu_mul(const float *d_gate, const float *d_up, float *d_y, int n);
 
-// Rotary Positional Embeddings on a flat (n_heads, s, h_d) row-major buffer.
+// Rotary Positional Embeddings on a flat (s, n_heads, h_d) row-major buffer.
 // cos_table and sin_table are precomputed (s, h_d/2) row-major. Pairs dim i
 // with dim i + h_d/2 (rotate_half convention).
 void launch_rope(const float *d_qk, const float *d_cos, const float *d_sin,
                  float *d_out, int n_heads, int s, int h_d);
 
 // Grouped Query Attention with causal mask and numerically stable softmax.
-// Q is (n_heads, s, h_d) row-major; K, V are (n_kv_heads, s, h_d) row-major.
-// Output is flat (s, n_heads * h_d) — concatenated head outputs per token.
-// Group size = n_heads / n_kv_heads (integer); KV head index for query head i
-// is g = i / group_size, per part2.pdf §3.1.
+// Q is flat (s, n_heads, h_d) row-major; K, V are (s, n_kv_heads, h_d).
+// Output is flat (s, n_heads, h_d) = (s, n_heads * h_d) — concatenated head
+// outputs per token. KV head index for query head i is i / (n_heads/n_kv_heads).
 void launch_gqa_attention(const float *d_Q, const float *d_K, const float *d_V,
                           float *d_O, int n_heads, int n_kv_heads, int s, int h_d);

@@ -348,7 +348,7 @@ bool test_2() {
 bool test_3() {
     char path[256];
     std::snprintf(path, sizeof(path), "%s/test3_embedding.bin", DATA_DIR);
-    auto fix = load_embedding(path);
+    auto fix = load_embedding(path); 
 
     TestAPI api;
     auto got = api.get_embeddings(fix.token_ids);
