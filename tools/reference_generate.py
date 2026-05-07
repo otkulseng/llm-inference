@@ -28,7 +28,7 @@ def main():
     # tie-breaks. Switch to torch.float32 if you want bit-equivalent comparison
     # (needs ~32 GB GPU vs ~16 GB for bfloat16).
     model = AutoModelForCausalLM.from_pretrained(
-        MODEL_DIR, torch_dtype=torch.bfloat16
+        MODEL_DIR, dtype=torch.bfloat16
     ).to("cuda")
     model.eval()
 

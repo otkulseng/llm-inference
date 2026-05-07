@@ -3,46 +3,52 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cuda_bf16.h>
 #include <cuda_runtime.h>
 
-// Convert a flat BF16 array (uint16_t) to FP32 elementwise.  BF16 is the
-// upper 16 bits of an FP32 value, so the conversion is a left-shift by 16.
-// Used by the bulk weight-loading path so we can H2D the BF16 bytes (half
-// the size of FP32) and convert on the GPU instead of on the CPU.
-void launch_bf16_to_fp32(const uint16_t *d_in, float *d_out, std::size_t n);
+// All persistent storage lives as __nv_bfloat16. Per-thread FP32 accumulators
+// are used inside kernels for precision (matmul reductions, softmax sums,
+// rmsnorm sum-of-squares) but no FP32 buffer ever touches global or shared
+// memory.
 
-// Tiled matrix multiplication: C[M,N] = A[M,K] * B[K,N]
-// All matrices are row-major, flat arrays.
-void launch_matmul(const float *d_A, const float *d_B, float *d_C,
-                   int M, int K, int N);
+// Tiled matrix multiplication: C[M,N] = A[M,K] * B[K,N], all row-major BF16.
+// FP32 accumulator in registers; BF16 store at end.
+void launch_matmul(const __nv_bfloat16 *d_A, const __nv_bfloat16 *d_B,
+                   __nv_bfloat16 *d_C, int M, int K, int N);
 
 // Matmul with B stored transposed: C[M,N] = A[M,K] * B^T, where B is given
-// as (N, K) row-major. Equivalent to PyTorch `A @ B.T` for B of shape (N, K).
-// Used for X @ W^T where W is stored as (out, in) per the HuggingFace
-// checkpoint convention (part2.pdf §4).
-void launch_matmul_xwt(const float *d_A, const float *d_B, float *d_C,
-                       int M, int K, int N);
+// as (N, K) row-major. Used for X @ W^T where W is (out, in) per HuggingFace.
+void launch_matmul_xwt(const __nv_bfloat16 *d_A, const __nv_bfloat16 *d_B,
+                       __nv_bfloat16 *d_C, int M, int K, int N);
 
 // Row-wise RMSNorm: y[r, i] = x[r, i] * gamma[i] / sqrt(mean(x[r, :]^2) + eps).
-// x and y are flat (s, d) row-major; gamma is (d,).
-void launch_rmsnorm(const float *d_x, const float *d_gamma, float *d_y,
-                    int s, int d, float eps);
+// x and y are flat (s, d) row-major; gamma is (d,). All BF16.
+void launch_rmsnorm(const __nv_bfloat16 *d_x, const __nv_bfloat16 *d_gamma,
+                    __nv_bfloat16 *d_y, int s, int d, float eps);
 
-// Elementwise residual add: y[i] = a[i] + b[i]. All flat, length n.
-void launch_residual_add(const float *d_a, const float *d_b, float *d_y, int n);
+// Elementwise residual add: y[i] = a[i] + b[i].
+void launch_residual_add(const __nv_bfloat16 *d_a, const __nv_bfloat16 *d_b,
+                         __nv_bfloat16 *d_y, int n);
 
 // Elementwise SiLU(gate) * up: y[i] = (gate[i] / (1 + exp(-gate[i]))) * up[i].
-void launch_silu_mul(const float *d_gate, const float *d_up, float *d_y, int n);
+void launch_silu_mul(const __nv_bfloat16 *d_gate, const __nv_bfloat16 *d_up,
+                     __nv_bfloat16 *d_y, int n);
 
 // Rotary Positional Embeddings on a flat (s, n_heads, h_d) row-major buffer.
-// cos_table and sin_table are precomputed (s, h_d/2) row-major. Pairs dim i
-// with dim i + h_d/2 (rotate_half convention).
-void launch_rope(const float *d_qk, const float *d_cos, const float *d_sin,
-                 float *d_out, int n_heads, int s, int h_d);
+// cos_table and sin_table are precomputed (s, h_d/2) row-major BF16. Pairs
+// dim i with dim i + h_d/2 (rotate_half convention).
+void launch_rope(const __nv_bfloat16 *d_qk, const __nv_bfloat16 *d_cos,
+                 const __nv_bfloat16 *d_sin, __nv_bfloat16 *d_out,
+                 int n_heads, int s, int h_d);
 
 // Grouped Query Attention with causal mask and numerically stable softmax.
-// Q is flat (s, n_heads, h_d) row-major; K, V are (s, n_kv_heads, h_d).
-// Output is flat (s, n_heads, h_d) = (s, n_heads * h_d) — concatenated head
-// outputs per token. KV head index for query head i is i / (n_heads/n_kv_heads).
-void launch_gqa_attention(const float *d_Q, const float *d_K, const float *d_V,
-                          float *d_O, int n_heads, int n_kv_heads, int s, int h_d);
+// Q is flat (s, n_heads, h_d); K, V are (s, n_kv_heads, h_d); output is
+// (s, n_heads, h_d) = (s, n_heads * h_d). KV head index = i / (n_heads/n_kv_heads).
+void launch_gqa_attention(const __nv_bfloat16 *d_Q, const __nv_bfloat16 *d_K,
+                          const __nv_bfloat16 *d_V, __nv_bfloat16 *d_O,
+                          int n_heads, int n_kv_heads, int s, int h_d);
+
+// Embedding lookup: out[t, :] = table[token_ids[t], :]. table is (V, d) BF16,
+// out is (n_tokens, d) BF16. token_ids is host-allocated int but copied to GPU.
+void launch_embed_gather(const __nv_bfloat16 *d_table, const int *d_token_ids,
+                         __nv_bfloat16 *d_out, int n_tokens, int d);

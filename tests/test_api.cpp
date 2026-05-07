@@ -1,5 +1,6 @@
 #include "test_api.h"
 
+#include "bf16.h"
 #include "config.h"
 #include "device_buffer.h"
 #include "kernels.cuh"
@@ -18,26 +19,29 @@ vector<float> TestAPI::get_embeddings(vector<int> token_ids) {
     return Model{}.embed(token_ids);
 }
 
+// Test wrappers convert fp32 inputs/outputs at the boundary; everything on
+// the GPU is BF16 with FP32 register accumulators inside kernels.
+
 vector<float> TestAPI::matmul(const vector<float> &A, const vector<float> &B,
                               int M, int K, int N) {
-    DeviceBuffer<float> d_A(A);
-    DeviceBuffer<float> d_B(B);
-    DeviceBuffer<float> d_C(M * N);
+    DeviceBuffer<__nv_bfloat16> d_A(to_bf16_host(A));
+    DeviceBuffer<__nv_bfloat16> d_B(to_bf16_host(B));
+    DeviceBuffer<__nv_bfloat16> d_C(M * N);
 
     launch_matmul(d_A.data(), d_B.data(), d_C.data(), M, K, N);
 
-    return d_C.to_host();
+    return to_fp32_host(d_C.to_host());
 }
 
 vector<float> TestAPI::rmsnorm(const vector<float> &x,
                                const vector<float> &gamma, int s, int d) {
-    DeviceBuffer<float> d_x(x);
-    DeviceBuffer<float> d_gamma(gamma);
-    DeviceBuffer<float> d_y(s * d);
+    DeviceBuffer<__nv_bfloat16> d_x(to_bf16_host(x));
+    DeviceBuffer<__nv_bfloat16> d_gamma(to_bf16_host(gamma));
+    DeviceBuffer<__nv_bfloat16> d_y(s * d);
 
     launch_rmsnorm(d_x.data(), d_gamma.data(), d_y.data(), s, d, RMS_NORM_EPSILON);
 
-    return d_y.to_host();
+    return to_fp32_host(d_y.to_host());
 }
 
 // Permute (n_heads, s, h_d) <-> (s, n_heads, h_d), both flat row-major.
@@ -71,7 +75,8 @@ vector<float> TestAPI::rope(const vector<float> &qk, int n_heads, int s,
     int half = h_d / 2;
 
     // Pre-compute cos(p * theta_i) and sin(p * theta_i) per part2.pdf §3.2:
-    // theta_i = 1 / ROPE_BASE^(2i/h_d), shared across heads.
+    // theta_i = 1 / ROPE_BASE^(2i/h_d), shared across heads. Convert fp32 ->
+    // BF16 for the kernel.
     vector<float> cos_tab(s * half);
     vector<float> sin_tab(s * half);
     for (int i = 0; i < half; ++i) {
@@ -83,15 +88,16 @@ vector<float> TestAPI::rope(const vector<float> &qk, int n_heads, int s,
     }
 
     vector<float> qk_shd = transpose_hsd_to_shd(qk, n_heads, s, h_d);
-    DeviceBuffer<float> d_qk(qk_shd);
-    DeviceBuffer<float> d_cos(cos_tab);
-    DeviceBuffer<float> d_sin(sin_tab);
-    DeviceBuffer<float> d_out(qk.size());
+    DeviceBuffer<__nv_bfloat16> d_qk(to_bf16_host(qk_shd));
+    DeviceBuffer<__nv_bfloat16> d_cos(to_bf16_host(cos_tab));
+    DeviceBuffer<__nv_bfloat16> d_sin(to_bf16_host(sin_tab));
+    DeviceBuffer<__nv_bfloat16> d_out(qk.size());
 
     launch_rope(d_qk.data(), d_cos.data(), d_sin.data(), d_out.data(),
                 n_heads, s, h_d);
 
-    return transpose_shd_to_hsd(d_out.to_host(), n_heads, s, h_d);
+    return transpose_shd_to_hsd(to_fp32_host(d_out.to_host()),
+                                n_heads, s, h_d);
 }
 
 vector<float> TestAPI::gqa_attention(const vector<float> &Q,
@@ -104,37 +110,37 @@ vector<float> TestAPI::gqa_attention(const vector<float> &Q,
     vector<float> K_shd = transpose_hsd_to_shd(K, N_KV_HEADS, s, H_DIM);
     vector<float> V_shd = transpose_hsd_to_shd(V, N_KV_HEADS, s, H_DIM);
 
-    DeviceBuffer<float> d_Q(Q_shd);
-    DeviceBuffer<float> d_K(K_shd);
-    DeviceBuffer<float> d_V(V_shd);
-    DeviceBuffer<float> d_O(s * N_HEADS * H_DIM);
+    DeviceBuffer<__nv_bfloat16> d_Q(to_bf16_host(Q_shd));
+    DeviceBuffer<__nv_bfloat16> d_K(to_bf16_host(K_shd));
+    DeviceBuffer<__nv_bfloat16> d_V(to_bf16_host(V_shd));
+    DeviceBuffer<__nv_bfloat16> d_O(s * N_HEADS * H_DIM);
 
     launch_gqa_attention(d_Q.data(), d_K.data(), d_V.data(), d_O.data(),
                          N_HEADS, N_KV_HEADS, s, H_DIM);
 
-    return d_O.to_host();
+    return to_fp32_host(d_O.to_host());
 }
 
 vector<float> TestAPI::residual_add(const vector<float> &a,
                                     const vector<float> &b) {
-    DeviceBuffer<float> d_a(a);
-    DeviceBuffer<float> d_b(b);
-    DeviceBuffer<float> d_y(a.size());
+    DeviceBuffer<__nv_bfloat16> d_a(to_bf16_host(a));
+    DeviceBuffer<__nv_bfloat16> d_b(to_bf16_host(b));
+    DeviceBuffer<__nv_bfloat16> d_y(a.size());
 
     launch_residual_add(d_a.data(), d_b.data(), d_y.data(), a.size());
 
-    return d_y.to_host();
+    return to_fp32_host(d_y.to_host());
 }
 
 vector<float> TestAPI::silu_mul(const vector<float> &gate,
                                 const vector<float> &up) {
-    DeviceBuffer<float> d_gate(gate);
-    DeviceBuffer<float> d_up(up);
-    DeviceBuffer<float> d_y(gate.size());
+    DeviceBuffer<__nv_bfloat16> d_gate(to_bf16_host(gate));
+    DeviceBuffer<__nv_bfloat16> d_up(to_bf16_host(up));
+    DeviceBuffer<__nv_bfloat16> d_y(gate.size());
 
     launch_silu_mul(d_gate.data(), d_up.data(), d_y.data(), gate.size());
 
-    return d_y.to_host();
+    return to_fp32_host(d_y.to_host());
 }
 
 vector<float> TestAPI::swiglu_ffn(const vector<float> &x_norm, int layer_idx,

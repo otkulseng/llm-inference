@@ -2,9 +2,10 @@
 
 // Tiled matmul where B is stored transposed: C[M, N] = A[M, K] · B^T,
 // with B given as (N, K) row-major. Equivalent to PyTorch `A @ B.T` for B of
-// shape (N, K). Used pervasively in this project because HuggingFace stores
-// projection weights as (out_dim, in_dim) — so X @ W.T in math terms is the
-// natural call site (see part2.pdf §4).
+// shape (N, K). All BF16 in/out, FP32 register accumulator. Used pervasively
+// in this project because HuggingFace stores projection weights as
+// (out_dim, in_dim) — so X @ W.T in math terms is the natural call site
+// (see part2.pdf §4).
 //
 // Same tile/blocking as matmul.cu; only the B load and shared-memory layout
 // change. We store B transposed in shared memory (sB[k][n] = B[n, k]) so that
@@ -14,10 +15,10 @@
 
 #define TILE_SIZE 32
 
-__global__ void matmul_xwt_tiled(const float *A, const float *B, float *C,
-                                 int M, int K, int N) {
-    __shared__ float sA[TILE_SIZE][TILE_SIZE];
-    __shared__ float sB[TILE_SIZE][TILE_SIZE];
+__global__ void matmul_xwt_tiled(const __nv_bfloat16 *A, const __nv_bfloat16 *B,
+                                 __nv_bfloat16 *C, int M, int K, int N) {
+    __shared__ __nv_bfloat16 sA[TILE_SIZE][TILE_SIZE];
+    __shared__ __nv_bfloat16 sB[TILE_SIZE][TILE_SIZE];
 
     int row = blockIdx.y * TILE_SIZE + threadIdx.y;  // m
     int col = blockIdx.x * TILE_SIZE + threadIdx.x;  // n
@@ -31,7 +32,7 @@ __global__ void matmul_xwt_tiled(const float *A, const float *B, float *C,
         if (row < M && a_k < K) {
             sA[threadIdx.y][threadIdx.x] = A[row * K + a_k];
         } else {
-            sA[threadIdx.y][threadIdx.x] = 0.0f;
+            sA[threadIdx.y][threadIdx.x] = __float2bfloat16(0.0f);
         }
         // sB[tx][ty] = B[blockIdx.x*TS + ty, t*TS + tx]   (coalesced over tx → k)
         int b_n = blockIdx.x * TILE_SIZE + threadIdx.y;
@@ -39,22 +40,24 @@ __global__ void matmul_xwt_tiled(const float *A, const float *B, float *C,
         if (b_n < N && b_k < K) {
             sB[threadIdx.x][threadIdx.y] = B[b_n * K + b_k];
         } else {
-            sB[threadIdx.x][threadIdx.y] = 0.0f;
+            sB[threadIdx.x][threadIdx.y] = __float2bfloat16(0.0f);
         }
         __syncthreads();
 
         for (int i = 0; i < TILE_SIZE; i++) {
-            sum += sA[threadIdx.y][i] * sB[i][threadIdx.x];
+            float a = __bfloat162float(sA[threadIdx.y][i]);
+            float b = __bfloat162float(sB[i][threadIdx.x]);
+            sum += a * b;
         }
         __syncthreads();
     }
     if (row < M && col < N) {
-        C[row * N + col] = sum;
+        C[row * N + col] = __float2bfloat16(sum);
     }
 }
 
-void launch_matmul_xwt(const float *d_A, const float *d_B, float *d_C,
-                       int M, int K, int N) {
+void launch_matmul_xwt(const __nv_bfloat16 *d_A, const __nv_bfloat16 *d_B,
+                       __nv_bfloat16 *d_C, int M, int K, int N) {
     dim3 block(TILE_SIZE, TILE_SIZE);
     dim3 grid((N + TILE_SIZE - 1) / TILE_SIZE,
               (M + TILE_SIZE - 1) / TILE_SIZE);

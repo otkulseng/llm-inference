@@ -9,6 +9,8 @@
 template <typename T>
 class DeviceBuffer {
   public:
+    DeviceBuffer() : ptr_(nullptr), n_(0) {}
+
     explicit DeviceBuffer(std::size_t n) : n_(n) {
         cudaMalloc(&ptr_, n_ * sizeof(T));
     }

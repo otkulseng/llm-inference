@@ -3,48 +3,50 @@
 #include "device_buffer.h"
 #include "loader.h"
 #include "prelude.h"
+#include <cuda_bf16.h>
 
-// Llama-3-8B inference engine. Owns the per-instance loader. Layer weights
-// are loaded on demand inside the methods that need them — no eager preload.
+// Llama-3-8B inference engine. All persistent storage is __nv_bfloat16; FP32
+// is used only in per-thread registers inside kernels for precision-critical
+// reductions (matmul accumulators, softmax sums, rmsnorm sum-of-squares).
 //
-// Layout:
-//   - Tokenizer + embedding: thin wrappers around BPETokenizer / LlamaDumpLoader.
-//   - swiglu_ffn / decoder_block: single-layer ops, used by tests 15 and 16.
-//   - forward_one_step: full pipeline (32 layers + final norm + lm_head + argmax).
-//   - generate: autoregressive loop over forward_one_step.
-//
-// All compute happens in FP32; weights are stored on disk as BF16 and converted
-// to FP32 on the GPU via launch_bf16_to_fp32.
+// All weights are loaded eagerly at construction (~16 GB in BF16 — fits in
+// the 20 GB MIG slice). No lazy/optional/streaming abstraction; methods read
+// the cached members directly.
 class Model {
   public:
     Model();
 
-    // Tokenizer (constructs BPETokenizer lazily inside each call).
     vector<int> tokenize(const string &input);
     string detokenize(const vector<int> &ids);
 
-    // Embedding lookup. Selective row access via the LlamaDumpLoader's CPU path.
+    // Embedding lookup via the on-GPU gather kernel. Returns FP32 to match
+    // the test fixture format.
     vector<float> embed(const vector<int> &ids);
 
-    // Single-layer ops.
     vector<float> swiglu_ffn(const vector<float> &x_norm, int layer_idx, int s);
     vector<float> decoder_block(const vector<float> &x, int layer_idx, int s);
 
-    // Full inference.
     int forward_one_step(const vector<int> &ids);
     vector<int> generate(const vector<int> &ids, int n_new);
 
   private:
     struct LayerWeights {
-        DeviceBuffer<float> input_norm, q, k, v, o;
-        DeviceBuffer<float> post_norm, gate, up, down;
+        DeviceBuffer<__nv_bfloat16> input_norm, q, k, v, o;
+        DeviceBuffer<__nv_bfloat16> post_norm, gate, up, down;
     };
 
     LayerWeights load_layer(int layer_idx);
-    DeviceBuffer<float> run_decoder_block(const DeviceBuffer<float> &d_x,
-                                          const LayerWeights &w,
-                                          const float *d_cos,
-                                          const float *d_sin, int s);
+    DeviceBuffer<__nv_bfloat16>
+    run_decoder_block(const DeviceBuffer<__nv_bfloat16> &d_x,
+                      const LayerWeights &w,
+                      const __nv_bfloat16 *d_cos, const __nv_bfloat16 *d_sin,
+                      int s);
 
+    // loader_ must be declared before any cache so it's constructed first
+    // (the cache loads use it during the constructor body).
     LlamaDumpLoader loader_;
+    DeviceBuffer<__nv_bfloat16> embed_;       // (V, d)
+    vector<LayerWeights> layers_;             // 32
+    DeviceBuffer<__nv_bfloat16> final_norm_;  // (d,)
+    DeviceBuffer<__nv_bfloat16> lm_head_;     // (V, d)
 };

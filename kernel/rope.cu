@@ -15,16 +15,16 @@
 // This is the "rotate_half" convention from the HuggingFace Llama
 // implementation: pair dim i with dim i+h_d/2, NOT i with i+1.
 //
-// cos_table and sin_table are pre-computed (s, h_d/2) row-major. They are
-// shared across heads (same rotation applied to every head).
-//
-// One thread per (head, token, pair) triple. Each thread touches two output
-// elements (the rotation pair).
+// cos_table and sin_table are pre-computed (s, h_d/2) row-major BF16 (computed
+// on host as fp32, downcast at upload). All compute is in FP32 registers; the
+// stored q outputs are BF16.
 
 constexpr int BLOCK_SIZE = 256;
 
-__global__ void rope_kernel(const float *qk, const float *cos_table,
-                            const float *sin_table, float *out,
+__global__ void rope_kernel(const __nv_bfloat16 *qk,
+                            const __nv_bfloat16 *cos_table,
+                            const __nv_bfloat16 *sin_table,
+                            __nv_bfloat16 *out,
                             int n_heads, int s, int h_d) {
     int half = h_d / 2;
     int total = n_heads * s * half;
@@ -39,18 +39,18 @@ __global__ void rope_kernel(const float *qk, const float *cos_table,
     int lo = row_base + pair;
     int hi = row_base + pair + half;
 
-    float c  = cos_table[t * half + pair];
-    float si = sin_table[t * half + pair];
+    float c  = __bfloat162float(cos_table[t * half + pair]);
+    float si = __bfloat162float(sin_table[t * half + pair]);
+    float q_lo = __bfloat162float(qk[lo]);
+    float q_hi = __bfloat162float(qk[hi]);
 
-    float q_lo = qk[lo];
-    float q_hi = qk[hi];
-
-    out[lo] = c  * q_lo - si * q_hi;
-    out[hi] = si * q_lo + c  * q_hi;
+    out[lo] = __float2bfloat16(c  * q_lo - si * q_hi);
+    out[hi] = __float2bfloat16(si * q_lo + c  * q_hi);
 }
 
-void launch_rope(const float *d_qk, const float *d_cos, const float *d_sin,
-                 float *d_out, int n_heads, int s, int h_d) {
+void launch_rope(const __nv_bfloat16 *d_qk, const __nv_bfloat16 *d_cos,
+                 const __nv_bfloat16 *d_sin, __nv_bfloat16 *d_out,
+                 int n_heads, int s, int h_d) {
     int total = n_heads * s * (h_d / 2);
     dim3 grid((total + BLOCK_SIZE - 1) / BLOCK_SIZE);
     dim3 block(BLOCK_SIZE);
