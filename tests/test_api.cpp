@@ -2,9 +2,10 @@
 
 #include "test_api.h"
 #include "config.h"
+#include "device_buffer.h"
+#include "kernels.cuh"
 #include "loader.h"
 #include "tokenizer.h"
-#include "kernels.cuh"
 #include <iostream>
 
 vector<int> TestAPI::tokenize(string input) {
@@ -39,33 +40,13 @@ vector<float> TestAPI::get_embeddings(vector<int> token_ids) {
 
 vector<float> TestAPI::matmul(const vector<float> &A, const vector<float> &B,
                               int M, int K, int N) {
-    size_t size_A = M * K * sizeof(float);
-    size_t size_B = K * N * sizeof(float);
-    size_t size_C = M * N * sizeof(float);
+    DeviceBuffer<float> d_A(A);
+    DeviceBuffer<float> d_B(B);
+    DeviceBuffer<float> d_C(M * N);
 
-    // Allocate device memory
-    float *d_A, *d_B, *d_C;
-    cudaMalloc(&d_A, size_A);
-    cudaMalloc(&d_B, size_B);
-    cudaMalloc(&d_C, size_C);
+    launch_matmul(d_A.data(), d_B.data(), d_C.data(), M, K, N);
 
-    // Copy inputs to device
-    cudaMemcpy(d_A, A.data(), size_A, cudaMemcpyHostToDevice);
-    cudaMemcpy(d_B, B.data(), size_B, cudaMemcpyHostToDevice);
-
-    // Launch kernel
-    launch_matmul(d_A, d_B, d_C, M, K, N);
-
-    // Copy result back to host
-    vector<float> C(M * N);
-    cudaMemcpy(C.data(), d_C, size_C, cudaMemcpyDeviceToHost);
-
-    // Free device memory
-    cudaFree(d_A);
-    cudaFree(d_B);
-    cudaFree(d_C);
-
-    return C;
+    return d_C.to_host();
 }
 
 // ---- Milestone 2/3 stubs (replace with real implementations) ----
@@ -76,27 +57,13 @@ string TestAPI::detokenize(vector<int> token_ids) {
 
 vector<float> TestAPI::rmsnorm(const vector<float> &x,
                                const vector<float> &gamma, int s, int d) {
-    size_t size_x = s * d * sizeof(float);
-    size_t size_gamma = d * sizeof(float);
+    DeviceBuffer<float> d_x(x);
+    DeviceBuffer<float> d_gamma(gamma);
+    DeviceBuffer<float> d_y(s * d);
 
-    float *d_x, *d_gamma, *d_y;
-    cudaMalloc(&d_x, size_x);
-    cudaMalloc(&d_gamma, size_gamma);
-    cudaMalloc(&d_y, size_x);
+    launch_rmsnorm(d_x.data(), d_gamma.data(), d_y.data(), s, d, RMS_NORM_EPSILON);
 
-    cudaMemcpy(d_x, x.data(), size_x, cudaMemcpyHostToDevice);
-    cudaMemcpy(d_gamma, gamma.data(), size_gamma, cudaMemcpyHostToDevice);
-
-    launch_rmsnorm(d_x, d_gamma, d_y, s, d, RMS_NORM_EPSILON);
-
-    vector<float> y(s * d);
-    cudaMemcpy(y.data(), d_y, size_x, cudaMemcpyDeviceToHost);
-
-    cudaFree(d_x);
-    cudaFree(d_gamma);
-    cudaFree(d_y);
-
-    return y;
+    return d_y.to_host();
 }
 
 vector<float> TestAPI::rope(const vector<float> &qk, int n_heads, int s,
