@@ -76,7 +76,27 @@ string TestAPI::detokenize(vector<int> token_ids) {
 
 vector<float> TestAPI::rmsnorm(const vector<float> &x,
                                const vector<float> &gamma, int s, int d) {
-    throw runtime_error("Not implemented: rmsnorm");
+    size_t size_x = s * d * sizeof(float);
+    size_t size_gamma = d * sizeof(float);
+
+    float *d_x, *d_gamma, *d_y;
+    cudaMalloc(&d_x, size_x);
+    cudaMalloc(&d_gamma, size_gamma);
+    cudaMalloc(&d_y, size_x);
+
+    cudaMemcpy(d_x, x.data(), size_x, cudaMemcpyHostToDevice);
+    cudaMemcpy(d_gamma, gamma.data(), size_gamma, cudaMemcpyHostToDevice);
+
+    launch_rmsnorm(d_x, d_gamma, d_y, s, d, RMS_NORM_EPSILON);
+
+    vector<float> y(s * d);
+    cudaMemcpy(y.data(), d_y, size_x, cudaMemcpyDeviceToHost);
+
+    cudaFree(d_x);
+    cudaFree(d_gamma);
+    cudaFree(d_y);
+
+    return y;
 }
 
 vector<float> TestAPI::rope(const vector<float> &qk, int n_heads, int s,
