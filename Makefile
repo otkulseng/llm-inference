@@ -20,10 +20,15 @@ INC_DIR := include
 BUILD_DIR := build
 BIN_DIR := bin
 TARGET := llm
-SOURCES := main.cpp $(SRC_DIR)/tokenizer_bpe.cpp 
+SOURCES := main.cpp $(SRC_DIR)/tokenizer_bpe.cpp
 OBJECTS := $(BUILD_DIR)/main.o $(BUILD_DIR)/tokenizer_bpe.o
 DEPS := $(OBJECTS:.o=.d)
 INCLUDES := -I$(INC_DIR) -I. -I$(KERNEL_DIR)
+
+# Auto-discover every .cu in kernel/. Drop a new file in there and it joins the
+# build with no Makefile edits.
+KERNEL_SRCS := $(wildcard $(KERNEL_DIR)/*.cu)
+KERNEL_OBJS := $(patsubst $(KERNEL_DIR)/%.cu,$(BUILD_DIR)/%.o,$(KERNEL_SRCS))
 
 
 all: $(BIN_DIR)/$(TARGET)
@@ -35,9 +40,7 @@ $(BUILD_DIR)/tokenizer_bpe.o: $(SRC_DIR)/tokenizer_bpe.cpp | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
 $(BUILD_DIR)/loader.o: $(SRC_DIR)/loader.cpp | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
-$(BUILD_DIR)/matmul.o: $(KERNEL_DIR)/matmul.cu | $(BUILD_DIR)
-	$(NVCC) $(NVCCFLAGS) $(INCLUDES) -c $< -o $@
-$(BUILD_DIR)/rmsnorm.o: $(KERNEL_DIR)/rmsnorm.cu | $(BUILD_DIR)
+$(BUILD_DIR)/%.o: $(KERNEL_DIR)/%.cu | $(BUILD_DIR)
 	$(NVCC) $(NVCCFLAGS) $(INCLUDES) -c $< -o $@
 $(BUILD_DIR) $(BIN_DIR):
 	mkdir -p $@
@@ -56,11 +59,11 @@ run: all
 
 # ------------------------------------------------------------
 # Tests build
-# Don't forget to add your required objects as well.
+# All kernel/*.cu objects are pulled in automatically via $(KERNEL_OBJS).
 
 .PHONY: tests
 
-TEST_OBJECTS := $(BUILD_DIR)/test.o $(BUILD_DIR)/test_api.o $(BUILD_DIR)/tokenizer_bpe.o $(BUILD_DIR)/loader.o $(BUILD_DIR)/matmul.o $(BUILD_DIR)/rmsnorm.o
+TEST_OBJECTS := $(BUILD_DIR)/test.o $(BUILD_DIR)/test_api.o $(BUILD_DIR)/tokenizer_bpe.o $(BUILD_DIR)/loader.o $(KERNEL_OBJS)
 
 tests: $(BIN_DIR)/tests
 
@@ -76,7 +79,7 @@ $(BUILD_DIR)/test_api.o: tests/test_api.cpp | $(BUILD_DIR)
 
 .PHONY: my_tests
 
-MY_TEST_OBJECTS := $(BUILD_DIR)/my_tests.o $(BUILD_DIR)/test_api.o $(BUILD_DIR)/tokenizer_bpe.o $(BUILD_DIR)/loader.o $(BUILD_DIR)/matmul.o $(BUILD_DIR)/rmsnorm.o
+MY_TEST_OBJECTS := $(BUILD_DIR)/my_tests.o $(BUILD_DIR)/test_api.o $(BUILD_DIR)/tokenizer_bpe.o $(BUILD_DIR)/loader.o $(KERNEL_OBJS)
 
 my_tests: $(BIN_DIR)/my_tests
 

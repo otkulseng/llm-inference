@@ -12,3 +12,9 @@ void launch_matmul(const float *d_A, const float *d_B, float *d_C,
 // x and y are flat (s, d) row-major; gamma is (d,).
 void launch_rmsnorm(const float *d_x, const float *d_gamma, float *d_y,
                     int s, int d, float eps);
+
+// Elementwise residual add: y[i] = a[i] + b[i]. All flat, length n.
+void launch_residual_add(const float *d_a, const float *d_b, float *d_y, int n);
+
+// Elementwise SiLU(gate) * up: y[i] = (gate[i] / (1 + exp(-gate[i]))) * up[i].
+void launch_silu_mul(const float *d_gate, const float *d_up, float *d_y, int n);

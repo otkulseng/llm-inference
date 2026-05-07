@@ -52,7 +52,8 @@ vector<float> TestAPI::matmul(const vector<float> &A, const vector<float> &B,
 // ---- Milestone 2/3 stubs (replace with real implementations) ----
 
 string TestAPI::detokenize(vector<int> token_ids) {
-    throw runtime_error("Not implemented: detokenize");
+    BPETokenizer tok(TOKENIZER_PATH);
+    return tok.decode(token_ids);
 }
 
 vector<float> TestAPI::rmsnorm(const vector<float> &x,
@@ -79,12 +80,24 @@ vector<float> TestAPI::gqa_attention(const vector<float> &Q,
 
 vector<float> TestAPI::residual_add(const vector<float> &a,
                                     const vector<float> &b) {
-    throw runtime_error("Not implemented: residual_add");
+    DeviceBuffer<float> d_a(a);
+    DeviceBuffer<float> d_b(b);
+    DeviceBuffer<float> d_y(a.size());
+
+    launch_residual_add(d_a.data(), d_b.data(), d_y.data(), a.size());
+
+    return d_y.to_host();
 }
 
 vector<float> TestAPI::silu_mul(const vector<float> &gate,
                                 const vector<float> &up) {
-    throw runtime_error("Not implemented: silu_mul");
+    DeviceBuffer<float> d_gate(gate);
+    DeviceBuffer<float> d_up(up);
+    DeviceBuffer<float> d_y(gate.size());
+
+    launch_silu_mul(d_gate.data(), d_up.data(), d_y.data(), gate.size());
+
+    return d_y.to_host();
 }
 
 vector<float> TestAPI::swiglu_ffn(const vector<float> &x_norm, int layer_idx,
