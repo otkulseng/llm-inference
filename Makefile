@@ -20,9 +20,6 @@ INC_DIR := include
 BUILD_DIR := build
 BIN_DIR := bin
 TARGET := llm
-SOURCES := main.cpp $(SRC_DIR)/tokenizer_bpe.cpp
-OBJECTS := $(BUILD_DIR)/main.o $(BUILD_DIR)/tokenizer_bpe.o
-DEPS := $(OBJECTS:.o=.d)
 INCLUDES := -I$(INC_DIR) -I. -I$(KERNEL_DIR)
 
 # Auto-discover every .cu in kernel/. Drop a new file in there and it joins the
@@ -30,12 +27,16 @@ INCLUDES := -I$(INC_DIR) -I. -I$(KERNEL_DIR)
 KERNEL_SRCS := $(wildcard $(KERNEL_DIR)/*.cu)
 KERNEL_OBJS := $(patsubst $(KERNEL_DIR)/%.cu,$(BUILD_DIR)/%.o,$(KERNEL_SRCS))
 
+SOURCES := main.cpp $(SRC_DIR)/tokenizer_bpe.cpp $(SRC_DIR)/loader.cpp $(SRC_DIR)/model.cpp
+OBJECTS := $(BUILD_DIR)/main.o $(BUILD_DIR)/tokenizer_bpe.o $(BUILD_DIR)/loader.o $(BUILD_DIR)/model.o $(KERNEL_OBJS)
+DEPS := $(OBJECTS:.o=.d)
+
 
 all: $(BIN_DIR)/$(TARGET)
 $(BIN_DIR)/$(TARGET): $(OBJECTS) | $(BIN_DIR)
-	$(CXX) $(OBJECTS) -o $@ $(LDFLAGS)
+	$(NVCC) $(OBJECTS) -o $@ $(LDFLAGS)
 $(BUILD_DIR)/main.o: main.cpp | $(BUILD_DIR)
-	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+	$(NVCC) $(NVCCFLAGS) $(INCLUDES) -c $< -o $@
 $(BUILD_DIR)/tokenizer_bpe.o: $(SRC_DIR)/tokenizer_bpe.cpp | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
 $(BUILD_DIR)/loader.o: $(SRC_DIR)/loader.cpp | $(BUILD_DIR)
