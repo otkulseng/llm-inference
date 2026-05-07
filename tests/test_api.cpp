@@ -67,3 +67,53 @@ vector<float> TestAPI::matmul(const vector<float> &A, const vector<float> &B,
 
     return C;
 }
+
+// ---- Milestone 2/3 stubs (replace with real implementations) ----
+
+string TestAPI::detokenize(vector<int> token_ids) {
+    throw runtime_error("Not implemented: detokenize");
+}
+
+vector<float> TestAPI::rmsnorm(const vector<float> &x,
+                               const vector<float> &gamma, int s, int d) {
+    throw runtime_error("Not implemented: rmsnorm");
+}
+
+vector<float> TestAPI::rope(const vector<float> &qk, int n_heads, int s,
+                            int h_d) {
+    throw runtime_error("Not implemented: rope");
+}
+
+vector<float> TestAPI::gqa_attention(const vector<float> &Q,
+                                     const vector<float> &K,
+                                     const vector<float> &V, int s) {
+    throw runtime_error("Not implemented: gqa_attention");
+}
+
+vector<float> TestAPI::residual_add(const vector<float> &a,
+                                    const vector<float> &b) {
+    throw runtime_error("Not implemented: residual_add");
+}
+
+vector<float> TestAPI::silu_mul(const vector<float> &gate,
+                                const vector<float> &up) {
+    throw runtime_error("Not implemented: silu_mul");
+}
+
+vector<float> TestAPI::swiglu_ffn(const vector<float> &x_norm, int layer_idx,
+                                  int s) {
+    throw runtime_error("Not implemented: swiglu_ffn");
+}
+
+vector<float> TestAPI::decoder_block(const vector<float> &x, int layer_idx,
+                                     int s) {
+    throw runtime_error("Not implemented: decoder_block");
+}
+
+int TestAPI::forward_one_step(const vector<int> &token_ids) {
+    throw runtime_error("Not implemented: forward_one_step");
+}
+
+vector<int> TestAPI::generate(const vector<int> &token_ids, int n_new) {
+    throw runtime_error("Not implemented: generate");
+}

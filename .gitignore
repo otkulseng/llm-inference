@@ -13,3 +13,5 @@ gold/
 !assets/*/tokenizer.model
 
 .setup-env.sh
+
+CS265-llm-starter/
