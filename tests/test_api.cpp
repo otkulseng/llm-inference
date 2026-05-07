@@ -98,7 +98,15 @@ vector<float> TestAPI::rope(const vector<float> &qk, int n_heads, int s,
 vector<float> TestAPI::gqa_attention(const vector<float> &Q,
                                      const vector<float> &K,
                                      const vector<float> &V, int s) {
-    throw runtime_error("Not implemented: gqa_attention");
+    DeviceBuffer<float> d_Q(Q);
+    DeviceBuffer<float> d_K(K);
+    DeviceBuffer<float> d_V(V);
+    DeviceBuffer<float> d_O(s * N_HEADS * H_DIM);
+
+    launch_gqa_attention(d_Q.data(), d_K.data(), d_V.data(), d_O.data(),
+                         N_HEADS, N_KV_HEADS, s, H_DIM);
+
+    return d_O.to_host();
 }
 
 vector<float> TestAPI::residual_add(const vector<float> &a,
@@ -125,7 +133,50 @@ vector<float> TestAPI::silu_mul(const vector<float> &gate,
 
 vector<float> TestAPI::swiglu_ffn(const vector<float> &x_norm, int layer_idx,
                                   int s) {
-    throw runtime_error("Not implemented: swiglu_ffn");
+    // Load this layer's MLP weights from disk. HuggingFace stores them as
+    // (out, in) so all three matmuls below are X @ W^T (see part2.pdf §4).
+    LlamaDumpLoader loader(DumpFloatType::FP32);
+    string prefix = "assets/llama3/blobs/model.layers." +
+                    std::to_string(layer_idx) + ".mlp.";
+    float *W_gate = loader.load_2d(prefix + "gate_proj.weight",
+                                   D_FF, EMBEDDING_DIM);
+    float *W_up   = loader.load_2d(prefix + "up_proj.weight",
+                                   D_FF, EMBEDDING_DIM);
+    float *W_down = loader.load_2d(prefix + "down_proj.weight",
+                                   EMBEDDING_DIM, D_FF);
+
+    DeviceBuffer<float> d_x(x_norm);
+    DeviceBuffer<float> d_Wg(D_FF * EMBEDDING_DIM);
+    DeviceBuffer<float> d_Wu(D_FF * EMBEDDING_DIM);
+    DeviceBuffer<float> d_Wd(EMBEDDING_DIM * D_FF);
+    cudaMemcpy(d_Wg.data(), W_gate, D_FF * EMBEDDING_DIM * sizeof(float),
+               cudaMemcpyHostToDevice);
+    cudaMemcpy(d_Wu.data(), W_up, D_FF * EMBEDDING_DIM * sizeof(float),
+               cudaMemcpyHostToDevice);
+    cudaMemcpy(d_Wd.data(), W_down, EMBEDDING_DIM * D_FF * sizeof(float),
+               cudaMemcpyHostToDevice);
+    delete[] W_gate;
+    delete[] W_up;
+    delete[] W_down;
+
+    DeviceBuffer<float> d_gate(s * D_FF);
+    DeviceBuffer<float> d_up(s * D_FF);
+    DeviceBuffer<float> d_hidden(s * D_FF);
+    DeviceBuffer<float> d_out(s * EMBEDDING_DIM);
+
+    // gate = x_norm @ W_gate^T   (s, d) · (d_ff, d)^T -> (s, d_ff)
+    launch_matmul_xwt(d_x.data(), d_Wg.data(), d_gate.data(),
+                      s, EMBEDDING_DIM, D_FF);
+    // up = x_norm @ W_up^T
+    launch_matmul_xwt(d_x.data(), d_Wu.data(), d_up.data(),
+                      s, EMBEDDING_DIM, D_FF);
+    // hidden = SiLU(gate) ⊙ up
+    launch_silu_mul(d_gate.data(), d_up.data(), d_hidden.data(), s * D_FF);
+    // ffn_out = hidden @ W_down^T   (s, d_ff) · (d, d_ff)^T -> (s, d)
+    launch_matmul_xwt(d_hidden.data(), d_Wd.data(), d_out.data(),
+                      s, D_FF, EMBEDDING_DIM);
+
+    return d_out.to_host();
 }
 
 vector<float> TestAPI::decoder_block(const vector<float> &x, int layer_idx,
