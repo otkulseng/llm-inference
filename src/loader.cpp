@@ -179,39 +179,48 @@ float_t *LlamaDumpLoader::get_embeddings(const std::vector<int> &token_ids) {
     return out;
 }
 
-// Could read instead, but easiert to use mmap_blob now that I have
-// the header logic properly there.
-float_t *LlamaDumpLoader::load_1d(const std::string &dump_file,
-                                   const size_t &dim0) {
-    BlobHeader hdr;
-    size_t mapped_size;
-    void *mapped = mmap_blob(dump_file, mapped_size, hdr);
+// ---------------------------------------------------------------------------
+// Blob: RAII handle for an mmap'd blob payload.
+// ---------------------------------------------------------------------------
 
-    // The dumper unsqueezes 1D tensors to [dim0, 1]
-    assert(hdr.rows == dim0 && hdr.cols == 1);
+LlamaDumpLoader::Blob::Blob(void *base, size_t size, BlobHeader h)
+    : raw(static_cast<const char *>(base) + sizeof(BlobHeader)),
+      header(h),
+      mmap_base_(base),
+      mmap_size_(size) {}
 
-    const void *raw = static_cast<const char *>(mapped) + sizeof(BlobHeader);
-
-    float_t *out = new float_t[dim0];
-    convert_to_float(raw, out, dim0, hdr.dtype);
-
-    munmap(mapped, mapped_size);
-    return out;
+LlamaDumpLoader::Blob::~Blob() {
+    if (mmap_base_) munmap(mmap_base_, mmap_size_);
 }
 
-float_t *LlamaDumpLoader::load_2d(const std::string &dump_file,
-                                   const size_t &dim0, const size_t &dim1) {
+LlamaDumpLoader::Blob::Blob(Blob &&o) noexcept
+    : raw(o.raw),
+      header(o.header),
+      mmap_base_(o.mmap_base_),
+      mmap_size_(o.mmap_size_) {
+    o.raw = nullptr;
+    o.mmap_base_ = nullptr;
+    o.mmap_size_ = 0;
+}
+
+LlamaDumpLoader::Blob &
+LlamaDumpLoader::Blob::operator=(Blob &&o) noexcept {
+    if (this != &o) {
+        if (mmap_base_) munmap(mmap_base_, mmap_size_);
+        raw = o.raw;
+        header = o.header;
+        mmap_base_ = o.mmap_base_;
+        mmap_size_ = o.mmap_size_;
+        o.raw = nullptr;
+        o.mmap_base_ = nullptr;
+        o.mmap_size_ = 0;
+    }
+    return *this;
+}
+
+LlamaDumpLoader::Blob LlamaDumpLoader::open_blob(const std::string &dump_file) {
     BlobHeader hdr;
     size_t mapped_size;
     void *mapped = mmap_blob(dump_file, mapped_size, hdr);
-
-    assert(hdr.rows == dim0 && hdr.cols == dim1);
-
-    const void *raw = static_cast<const char *>(mapped) + sizeof(BlobHeader);
-
-    float_t *out = new float_t[dim0 * dim1];
-    convert_to_float(raw, out, dim0 * dim1, hdr.dtype);
-
-    munmap(mapped, mapped_size);
-    return out;
+    return Blob(mapped, mapped_size, hdr);
 }

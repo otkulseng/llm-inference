@@ -40,6 +40,8 @@ $(BUILD_DIR)/tokenizer_bpe.o: $(SRC_DIR)/tokenizer_bpe.cpp | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
 $(BUILD_DIR)/loader.o: $(SRC_DIR)/loader.cpp | $(BUILD_DIR)
 	$(CXX) $(CXXFLAGS) $(INCLUDES) -c $< -o $@
+$(BUILD_DIR)/model.o: $(SRC_DIR)/model.cpp | $(BUILD_DIR)
+	$(NVCC) $(NVCCFLAGS) $(INCLUDES) -c $< -o $@
 $(BUILD_DIR)/%.o: $(KERNEL_DIR)/%.cu | $(BUILD_DIR)
 	$(NVCC) $(NVCCFLAGS) $(INCLUDES) -c $< -o $@
 $(BUILD_DIR) $(BIN_DIR):
@@ -63,7 +65,7 @@ run: all
 
 .PHONY: tests
 
-TEST_OBJECTS := $(BUILD_DIR)/test.o $(BUILD_DIR)/test_api.o $(BUILD_DIR)/tokenizer_bpe.o $(BUILD_DIR)/loader.o $(KERNEL_OBJS)
+TEST_OBJECTS := $(BUILD_DIR)/test.o $(BUILD_DIR)/test_api.o $(BUILD_DIR)/tokenizer_bpe.o $(BUILD_DIR)/loader.o $(BUILD_DIR)/model.o $(KERNEL_OBJS)
 
 tests: $(BIN_DIR)/tests
 
@@ -79,7 +81,7 @@ $(BUILD_DIR)/test_api.o: tests/test_api.cpp | $(BUILD_DIR)
 
 .PHONY: my_tests
 
-MY_TEST_OBJECTS := $(BUILD_DIR)/my_tests.o $(BUILD_DIR)/test_api.o $(BUILD_DIR)/tokenizer_bpe.o $(BUILD_DIR)/loader.o $(KERNEL_OBJS)
+MY_TEST_OBJECTS := $(BUILD_DIR)/my_tests.o $(BUILD_DIR)/test_api.o $(BUILD_DIR)/tokenizer_bpe.o $(BUILD_DIR)/loader.o $(BUILD_DIR)/model.o $(KERNEL_OBJS)
 
 my_tests: $(BIN_DIR)/my_tests
 

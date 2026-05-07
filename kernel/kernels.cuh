@@ -1,7 +1,15 @@
 // CUDA kernel declarations
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
 #include <cuda_runtime.h>
+
+// Convert a flat BF16 array (uint16_t) to FP32 elementwise.  BF16 is the
+// upper 16 bits of an FP32 value, so the conversion is a left-shift by 16.
+// Used by the bulk weight-loading path so we can H2D the BF16 bytes (half
+// the size of FP32) and convert on the GPU instead of on the CPU.
+void launch_bf16_to_fp32(const uint16_t *d_in, float *d_out, std::size_t n);
 
 // Tiled matrix multiplication: C[M,N] = A[M,K] * B[K,N]
 // All matrices are row-major, flat arrays.

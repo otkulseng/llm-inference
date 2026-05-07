@@ -12,7 +12,12 @@
 #include <stdexcept>
 
 vector<int> BPETokenizer::encode(const string &text) const {
-    return encode_impl(text, true);
+    // Llama 3 prepends <|begin_of_text|> to every prompt, matching
+    // HuggingFace's add_special_tokens=True default. encode_impl /
+    // encode_no_merge stay BOS-free for internal/debug use.
+    auto ids = encode_impl(text, true);
+    ids.insert(ids.begin(), bos_id_);
+    return ids;
 }
 
 vector<int> BPETokenizer::encode_no_merge(const string &text) const {
