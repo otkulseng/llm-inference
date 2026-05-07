@@ -18,3 +18,9 @@ void launch_residual_add(const float *d_a, const float *d_b, float *d_y, int n);
 
 // Elementwise SiLU(gate) * up: y[i] = (gate[i] / (1 + exp(-gate[i]))) * up[i].
 void launch_silu_mul(const float *d_gate, const float *d_up, float *d_y, int n);
+
+// Rotary Positional Embeddings on a flat (n_heads, s, h_d) row-major buffer.
+// cos_table and sin_table are precomputed (s, h_d/2) row-major. Pairs dim i
+// with dim i + h_d/2 (rotate_half convention).
+void launch_rope(const float *d_qk, const float *d_cos, const float *d_sin,
+                 float *d_out, int n_heads, int s, int h_d);

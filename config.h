@@ -9,3 +9,4 @@ const std::string TOKENIZER_PATH = "assets/llama3/token.model";
 
 const int EMBEDDING_DIM = 4096;
 const float RMS_NORM_EPSILON = 1e-5f;
+const float ROPE_BASE = 500000.0f;  // Llama 3 uses 500000, NOT 10000 like the original RoPE paper.

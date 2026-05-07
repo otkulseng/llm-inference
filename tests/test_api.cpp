@@ -6,6 +6,7 @@
 #include "kernels.cuh"
 #include "loader.h"
 #include "tokenizer.h"
+#include <cmath>
 #include <iostream>
 
 vector<int> TestAPI::tokenize(string input) {
@@ -69,7 +70,29 @@ vector<float> TestAPI::rmsnorm(const vector<float> &x,
 
 vector<float> TestAPI::rope(const vector<float> &qk, int n_heads, int s,
                             int h_d) {
-    throw runtime_error("Not implemented: rope");
+    int half = h_d / 2;
+
+    // Pre-compute cos(p * theta_i) and sin(p * theta_i) per part2.pdf §3.2:
+    // theta_i = 1 / ROPE_BASE^(2i/h_d), shared across heads.
+    vector<float> cos_tab(s * half);
+    vector<float> sin_tab(s * half);
+    for (int i = 0; i < half; ++i) {
+        float theta = 1.0f / std::pow(ROPE_BASE, (2.0f * i) / h_d);
+        for (int p = 0; p < s; ++p) {
+            cos_tab[p * half + i] = std::cos(p * theta);
+            sin_tab[p * half + i] = std::sin(p * theta);
+        }
+    }
+
+    DeviceBuffer<float> d_qk(qk);
+    DeviceBuffer<float> d_cos(cos_tab);
+    DeviceBuffer<float> d_sin(sin_tab);
+    DeviceBuffer<float> d_out(qk.size());
+
+    launch_rope(d_qk.data(), d_cos.data(), d_sin.data(), d_out.data(),
+                n_heads, s, h_d);
+
+    return d_out.to_host();
 }
 
 vector<float> TestAPI::gqa_attention(const vector<float> &Q,

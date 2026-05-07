@@ -7,9 +7,14 @@ A from-scratch Llama-3-8B inference engine: C++ controller plus hand-written CUD
 kernels, no PyTorch on the inference path. Three milestones:
 
 - **M1** — tokenization, weight dump + load, embedding lookup, matmul kernel. **Done.**
-- **M2** — RMSNorm kernel + Q/K/V projections (matmul reuse). **In progress.**
+- **M2** — RMSNorm kernel + Q/K/V projections (matmul reuse). **Done** — tests 9 (rmsnorm) and 10 (Q-projection matmul) pass.
 - **M3** — RoPE, GQA with causal mask, SwiGLU FFN, decoder block, 32-layer loop,
-  output head, autoregressive token generation.
+  output head, autoregressive token generation. **In progress.**
+  - `detokenize` (test 8) — done.
+  - `residual_add` (test 13) — done.
+  - `silu_mul` (test 14) — done.
+  - `rope` (test 11) — done.
+  - `gqa_attention` (test 12), `swiglu_ffn` (test 15), `decoder_block` (test 16), `forward_one_step` (test 17), `generate` (test 18) — pending.
 
 The full spec is in `part1.pdf` (M1) and `part2.pdf` (M2 + M3). A PyTorch
 reference for every operator is in `reference.py` — compare against it numerically
