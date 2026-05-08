@@ -30,7 +30,7 @@ static size_t print_weight(const char *name, size_t rows, size_t cols,
     std::fprintf(stderr, "  %-44s shape=(%6zu, %5zu)  BF16  %s",
                  name, rows, cols, fmt_bytes(bytes).c_str());
     if (multiplier > 1) {
-        std::fprintf(stderr, "  ×%d = %s", multiplier,
+        std::fprintf(stderr, "  x%d = %s", multiplier,
                      fmt_bytes(bytes * multiplier).c_str());
     }
     std::fprintf(stderr, "\n");
@@ -90,7 +90,7 @@ Model::Model() : tokenizer_(TOKENIZER_PATH) {
     std::fprintf(stderr, "[model] Weights resident on GPU:\n");
     size_t total = 0;
     total += print_weight("model.embed_tokens.weight", VOCAB_SIZE, EMBEDDING_DIM);
-    std::fprintf(stderr, "  decoder layers ×%d:\n", N_LAYERS);
+    std::fprintf(stderr, "  decoder layers x%d:\n", N_LAYERS);
     size_t per_layer = 0;
     per_layer += print_weight("    input_layernorm.weight",          EMBEDDING_DIM, 1, N_LAYERS);
     per_layer += print_weight("    self_attn.q_proj.weight",         (size_t)N_HEADS * H_DIM, EMBEDDING_DIM, N_LAYERS);
@@ -260,7 +260,7 @@ int Model::forward_one_step(const vector<int> &token_ids) {
                    s, EMBEDDING_DIM, RMS_NORM_EPSILON);
 
     // 5. lm_head on the last token only (part2.pdf §4: extract only the last
-    //    token before lm_head). 1×d row times W_lm^T (V×d row-major) → (1, V).
+    //    token before lm_head). 1xd row times W_lm^T (Vxd row-major) → (1, V).
     DeviceBuffer<__nv_bfloat16> d_logits(VOCAB_SIZE);
     const __nv_bfloat16 *d_x_last = d_x_norm.data() + (s - 1) * EMBEDDING_DIM;
     launch_matmul(d_x_last, lm_head_.data(), d_logits.data(),
