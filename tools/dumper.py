@@ -10,6 +10,7 @@ import struct
 from pathlib import Path
 import numpy as np
 from tqdm import tqdm
+import os
 
 F16 = 0
 F32 = 1
@@ -47,8 +48,8 @@ def write_tensor(path: str | Path, t: torch.Tensor) -> None:
 
         # raw bytes
         arr.tofile(f)
-
-root = Path("./assets/llama3")
+tools_dir = Path(os.path.dirname(os.path.abspath(__file__)))
+root = tools_dir.parent / "assets" / "llama3"
 store = root / "blobs"
 store.mkdir(exist_ok=True)
 

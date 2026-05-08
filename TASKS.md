@@ -116,13 +116,13 @@ A from-scratch Llama-3-8B-Instruct inference engine in C++ + CUDA. Single-prompt
 - Don't forget the `γ` scale step in RMSNorm.
 - Weights stored transposed (`(out_dim, in_dim)`) — matmul always computes `X · W^T`.
 - `lm_head.weight` shares storage with `model.embed_tokens.weight` — load once.
-- Project only the last token before `lm_head` (saves a `s × V` matmul over all rows).
+- Project only the last token before `lm_head` (saves a `s x V` matmul over all rows).
 - Causal mask applies to every row: `q > p` for every `p`, not just the last row.
 
 **M3 Bonus thought experiments:**
 
 - **B3.1.** Profile a forward pass with `nsys`. Which operator dominates wall time? Double `s` and re-profile. Which grows fastest with `s`, and why? What does that imply about the practical bottleneck of inference without KV caching?
-- **B3.2.** Score matrix `S_i ∈ R^(s × s)` is materialized for all `h=32` heads. Total memory at `s=512` in FP32? How does it scale with `s`? At what `s` does score-matrix memory exceed total model weights?
+- **B3.2.** Score matrix `S_i ∈ R^(s x s)` is materialized for all `h=32` heads. Total memory at `s=512` in FP32? How does it scale with `s`? At what `s` does score-matrix memory exceed total model weights?
 - **B3.3.** Without KV caching, generating `T` new tokens from prompt length `s_0` requires `T` forward passes on lengths `s_0+1, …, s_0+T`. Total FLOPs vs a system with KV cache (one-token-per-step)? Implication for latency at large `T`.
 
 ---

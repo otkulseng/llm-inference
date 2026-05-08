@@ -259,8 +259,7 @@ int Model::forward_one_step(const vector<int> &token_ids) {
     launch_rmsnorm(d_x.data(), final_norm_.data(), d_x_norm.data(),
                    s, EMBEDDING_DIM, RMS_NORM_EPSILON);
 
-    // 5. lm_head on the last token only (part2.pdf §4: extract only the last
-    //    token before lm_head). 1xd row times W_lm^T (Vxd row-major) → (1, V).
+    // 5. lm_head on the last token only
     DeviceBuffer<__nv_bfloat16> d_logits(VOCAB_SIZE);
     const __nv_bfloat16 *d_x_last = d_x_norm.data() + (s - 1) * EMBEDDING_DIM;
     launch_matmul(d_x_last, lm_head_.data(), d_logits.data(),
