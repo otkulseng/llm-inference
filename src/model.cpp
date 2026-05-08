@@ -3,22 +3,47 @@
 #include "bf16.h"
 #include "config.h"
 #include "kernels.cuh"
+#include "loader.h"
 #include "tokenizer.h"
 #include <cassert>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 
-// Bulk weight load. mmap the BF16 blob and cudaMemcpy raw bytes to GPU — the
-// on-disk format and the in-GPU format are now identical, so no conversion is
-// needed at load time.
+// Render `bytes` as a human-readable size: "8.00 KiB", "32.00 MiB", "1.00 GiB".
+static std::string fmt_bytes(size_t bytes) {
+    double v = (double)bytes;
+    const char *unit = "B";
+    if (v >= 1024.0) { v /= 1024.0; unit = "KiB"; }
+    if (v >= 1024.0) { v /= 1024.0; unit = "MiB"; }
+    if (v >= 1024.0) { v /= 1024.0; unit = "GiB"; }
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%6.2f %s", v, unit);
+    return buf;
+}
+
+// One row of the construction-time summary. `shape` is two dims (1D weights
+// pass {n, 1}). All weights are BF16, hence the hard-coded dtype string.
+static size_t print_weight(const char *name, size_t rows, size_t cols,
+                           int multiplier = 1) {
+    size_t bytes = rows * cols * sizeof(__nv_bfloat16);
+    std::fprintf(stderr, "  %-44s shape=(%6zu, %5zu)  BF16  %s",
+                 name, rows, cols, fmt_bytes(bytes).c_str());
+    if (multiplier > 1) {
+        std::fprintf(stderr, "  ×%d = %s", multiplier,
+                     fmt_bytes(bytes * multiplier).c_str());
+    }
+    std::fprintf(stderr, "\n");
+    return bytes * multiplier;
+}
+
 static DeviceBuffer<__nv_bfloat16>
-bulk_load_to_gpu(LlamaDumpLoader &loader, const string &path,
-                 size_t expected_count) {
-    auto blob = loader.open_blob(path);
-    assert(blob.header.dtype == 2 /*BF16*/);
-    assert(blob.header.rows * blob.header.cols == expected_count);
+bulk_load_to_gpu(const string &path, size_t expected_count) {
+    LlamaDumpLoader loader(path);
+    assert(loader.header.dtype == 2 /*BF16*/);
+    assert(loader.header.rows * loader.header.cols == expected_count);
     DeviceBuffer<__nv_bfloat16> d_out(expected_count);
-    cudaMemcpy(d_out.data(), blob.raw,
+    cudaMemcpy(d_out.data(), loader.raw,
                expected_count * sizeof(__nv_bfloat16),
                cudaMemcpyHostToDevice);
     return d_out;
@@ -47,19 +72,39 @@ make_rope_tables(int s, int h_d) {
 // Model
 // ---------------------------------------------------------------------------
 
-Model::Model() : loader_(DumpFloatType::FP32), tokenizer_(TOKENIZER_PATH) {
-    // Eager load of every weight. ~16 GB BF16 total, fits in the 20 GB MIG.
-    embed_ = bulk_load_to_gpu(loader_,
-                              "assets/llama3/blobs/model.embed_tokens.weight",
+Model::Model() : tokenizer_(TOKENIZER_PATH) {
+    embed_ = bulk_load_to_gpu("assets/llama3/blobs/model.embed_tokens.weight",
                               (size_t)VOCAB_SIZE * EMBEDDING_DIM);
     layers_.reserve(N_LAYERS);
     for (int L = 0; L < N_LAYERS; ++L) {
         layers_.push_back(load_layer(L));
     }
-    final_norm_ = bulk_load_to_gpu(
-        loader_, "assets/llama3/blobs/model.norm.weight", EMBEDDING_DIM);
-    lm_head_ = bulk_load_to_gpu(loader_, "assets/llama3/blobs/lm_head.weight",
+    final_norm_ = bulk_load_to_gpu("assets/llama3/blobs/model.norm.weight",
+                                   EMBEDDING_DIM);
+    lm_head_ = bulk_load_to_gpu("assets/llama3/blobs/lm_head.weight",
                                 (size_t)VOCAB_SIZE * EMBEDDING_DIM);
+
+    // Summary of resident GPU weights. Shapes derive from config.h so this is
+    // not actually probing the buffers — the shapes match what bulk_load_to_gpu
+    // asserted on the way in. Per-layer rows show layer 0 and multiply by 32.
+    std::fprintf(stderr, "[model] Weights resident on GPU:\n");
+    size_t total = 0;
+    total += print_weight("model.embed_tokens.weight", VOCAB_SIZE, EMBEDDING_DIM);
+    std::fprintf(stderr, "  decoder layers ×%d:\n", N_LAYERS);
+    size_t per_layer = 0;
+    per_layer += print_weight("    input_layernorm.weight",          EMBEDDING_DIM, 1, N_LAYERS);
+    per_layer += print_weight("    self_attn.q_proj.weight",         (size_t)N_HEADS * H_DIM, EMBEDDING_DIM, N_LAYERS);
+    per_layer += print_weight("    self_attn.k_proj.weight",         (size_t)N_KV_HEADS * H_DIM, EMBEDDING_DIM, N_LAYERS);
+    per_layer += print_weight("    self_attn.v_proj.weight",         (size_t)N_KV_HEADS * H_DIM, EMBEDDING_DIM, N_LAYERS);
+    per_layer += print_weight("    self_attn.o_proj.weight",         EMBEDDING_DIM, (size_t)N_HEADS * H_DIM, N_LAYERS);
+    per_layer += print_weight("    post_attention_layernorm.weight", EMBEDDING_DIM, 1, N_LAYERS);
+    per_layer += print_weight("    mlp.gate_proj.weight",            D_FF, EMBEDDING_DIM, N_LAYERS);
+    per_layer += print_weight("    mlp.up_proj.weight",              D_FF, EMBEDDING_DIM, N_LAYERS);
+    per_layer += print_weight("    mlp.down_proj.weight",            EMBEDDING_DIM, D_FF, N_LAYERS);
+    total += per_layer;
+    total += print_weight("model.norm.weight", EMBEDDING_DIM, 1);
+    total += print_weight("lm_head.weight", VOCAB_SIZE, EMBEDDING_DIM);
+    std::fprintf(stderr, "[model] Total: %s\n", fmt_bytes(total).c_str());
 }
 
 vector<int> Model::tokenize(const string &input) {
@@ -90,15 +135,15 @@ Model::LayerWeights Model::load_layer(int layer_idx) {
     const size_t kd = (size_t)N_KV_HEADS * H_DIM * d;
     const size_t fd = (size_t)D_FF * d;
     return LayerWeights{
-        bulk_load_to_gpu(loader_, p + "input_layernorm.weight",          d),
-        bulk_load_to_gpu(loader_, p + "self_attn.q_proj.weight",         qd),
-        bulk_load_to_gpu(loader_, p + "self_attn.k_proj.weight",         kd),
-        bulk_load_to_gpu(loader_, p + "self_attn.v_proj.weight",         kd),
-        bulk_load_to_gpu(loader_, p + "self_attn.o_proj.weight",         qd),
-        bulk_load_to_gpu(loader_, p + "post_attention_layernorm.weight", d),
-        bulk_load_to_gpu(loader_, p + "mlp.gate_proj.weight",            fd),
-        bulk_load_to_gpu(loader_, p + "mlp.up_proj.weight",              fd),
-        bulk_load_to_gpu(loader_, p + "mlp.down_proj.weight",            fd),
+        bulk_load_to_gpu(p + "input_layernorm.weight",          d),
+        bulk_load_to_gpu(p + "self_attn.q_proj.weight",         qd),
+        bulk_load_to_gpu(p + "self_attn.k_proj.weight",         kd),
+        bulk_load_to_gpu(p + "self_attn.v_proj.weight",         kd),
+        bulk_load_to_gpu(p + "self_attn.o_proj.weight",         qd),
+        bulk_load_to_gpu(p + "post_attention_layernorm.weight", d),
+        bulk_load_to_gpu(p + "mlp.gate_proj.weight",            fd),
+        bulk_load_to_gpu(p + "mlp.up_proj.weight",              fd),
+        bulk_load_to_gpu(p + "mlp.down_proj.weight",            fd),
     };
 }
 

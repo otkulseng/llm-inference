@@ -9,12 +9,27 @@ kernels, no PyTorch on the inference path. Three milestones:
 - **M1** — tokenization, weight dump + load, embedding lookup, matmul kernel. **Done.**
 - **M2** — RMSNorm kernel + Q/K/V projections (matmul reuse). **Done** — tests 9 (rmsnorm) and 10 (Q-projection matmul) pass.
 - **M3** — RoPE, GQA with causal mask, SwiGLU FFN, decoder block, 32-layer loop,
-  output head, autoregressive token generation. **In progress.**
-  - `detokenize` (test 8) — done.
-  - `residual_add` (test 13) — done.
-  - `silu_mul` (test 14) — done.
-  - `rope` (test 11) — done.
-  - `gqa_attention` (test 12), `swiglu_ffn` (test 15), `decoder_block` (test 16), `forward_one_step` (test 17), `generate` (test 18) — pending.
+  output head, autoregressive token generation. **Done.**
+  - `forward_one_step` (test 17): ~3.3 s/token. `generate` (test 18, 5 tokens):
+    ~4.6 s. `bin/llm` end-to-end: ~5 s.
+  - All weights cached on the GPU at `Model{}` construction (~16 GB total in
+    BF16). Eager load, no lazy/optional/streaming abstraction.
+
+The model-specific code lives in `include/model.h` + `src/model.cpp` (a `Model`
+class). `tests/test_api.cpp` is just kernel-test wrappers + thin `Model{}.foo()`
+pass-throughs — `TestAPI::generate(ids, n) { return Model{}.generate(ids, n); }`.
+
+**BF16 everywhere.** All persistent storage on the GPU is `__nv_bfloat16` (cached
+weights, activations, rope tables, attention scores). FP32 lives only in
+per-thread registers inside kernels for precision-critical reductions:
+matmul accumulators, softmax max/sum, rmsnorm sum-of-squares. No FP32 buffer
+ever touches global or shared memory. Host helpers in `include/bf16.h`
+convert at the test-API boundary.
+
+Currently 9 of 18 tests fail by small BF16-precision margins (max errors
+0.013-0.07 vs the original `EPSILON=0.01`); the course has agreed to relax
+those thresholds. The high-level integration tests (17, 18) and most
+elementwise/attention tests (1, 2, 3, 4, 8, 12, 13) still pass within 0.01.
 
 The full spec is in `part1.pdf` (M1) and `part2.pdf` (M2 + M3). A PyTorch
 reference for every operator is in `reference.py` — compare against it numerically
@@ -67,8 +82,6 @@ The `module load` line is required in every fresh shell.
 
 ## Known issues / non-goals
 
-- Test 1 currently fails: tokenizer doesn't prepend the BOS token (`128000`).
-  Pre-existing, separate concern.
 - KV caching and batching are explicitly out of scope per `part1.pdf §3.1`
   (optional bonus only).
 - Weights are stored transposed in the checkpoint as `(out_dim, in_dim)`, so

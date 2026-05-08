@@ -27,10 +27,10 @@ int main(int argc, char **argv) {
 
     auto t_total = clock_type::now();
 
-    std::cerr << "[loading weights]..." << std::flush;
+    std::cerr << "[loading weights] eager BF16 upload to GPU\n";
     auto t_load = clock_type::now();
     Model model;
-    std::cerr << " done in " << elapsed_s(t_load) << " s\n";
+    std::cerr << "[loading weights] done in " << elapsed_s(t_load) << " s\n";
 
     std::cerr << "[tokenizing] \"" << prompt << "\"..." << std::flush;
     auto t_tok = clock_type::now();

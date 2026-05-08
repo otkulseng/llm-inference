@@ -1,7 +1,6 @@
 #pragma once
 
 #include "device_buffer.h"
-#include "loader.h"
 #include "prelude.h"
 #include "tokenizer.h"
 #include <cuda_bf16.h>
@@ -48,9 +47,6 @@ class Model {
     run_swiglu_core(const DeviceBuffer<__nv_bfloat16> &d_x_norm,
                     const LayerWeights &w, int s);
 
-    // loader_ must be declared before any cache so it's constructed first
-    // (the cache loads use it during the constructor body).
-    LlamaDumpLoader loader_;
     BPETokenizer tokenizer_;
     // NOTE: part2.pdf §4 says lm_head and embed_tokens are tied in Llama 3;
     // that's true for Llama 1/2 but the actual Llama-3-8B-Instruct config has
