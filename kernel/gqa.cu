@@ -1,122 +1,106 @@
+#include "config.h"
 #include "kernels.cuh"
+#include <cassert>
 
-// Grouped Query Attention with causal mask and numerically stable softmax,
-// fused into one kernel per (head, query) per part2.pdf §3.1-3.2.
-//
-// All persistent storage is BF16 (Q, K, V, O, and shared-memory scratch).
-// FP32 register accumulators are used for the dot-product, the row-max, the
-// row-sum-of-exps, and the per-d weighted sum — these are the precision-
-// critical reductions.
+
 //
 // Layout (single, hardcoded):
-//   Q : flat (s, n_heads,    h_d) row-major
-//   K : flat (s, n_kv_heads, h_d) row-major
-//   V : flat (s, n_kv_heads, h_d) row-major
-//   O : flat (s, n_heads,    h_d) row-major  (= concat-of-heads per token)
+//   Q : flat (s, N_HEADS,    H_DIM) row-major
+//   K : flat (s, N_KV_HEADS, H_DIM) row-major
+//   V : flat (s, N_KV_HEADS, H_DIM) row-major
+//   O : flat (s, N_HEADS,    H_DIM) row-major  (= concat-of-heads per token)
 //
-// One block per (head_i, query position p). Inside a block the score row
-// scores[0..s) lives in shared memory as BF16 and is reused as the
-// unnormalized alpha row — it never touches HBM.
+
 
 constexpr int BLOCK_SIZE = 256;
 
 __global__ void gqa_attention_kernel(const __nv_bfloat16 *Q,
                                      const __nv_bfloat16 *K,
                                      const __nv_bfloat16 *V,
-                                     __nv_bfloat16 *O,
-                                     int n_heads, int n_kv_heads,
-                                     int s, int h_d) {
-    extern __shared__ __nv_bfloat16 smem[];
-    __nv_bfloat16 *q_shared       = smem;                  // [h_d]
-    __nv_bfloat16 *scores         = q_shared + h_d;        // [s]
-    __nv_bfloat16 *reduce_scratch = scores + s;            // [BLOCK_SIZE]
+                                     __nv_bfloat16 *O, int s) {
+    
+    __shared__ float scores[MAX_SEQ_LEN];
+    __shared__ float reduce_scratch[BLOCK_SIZE];
+    const int tid    = threadIdx.x;
+    const float scale = rsqrtf((float)H_DIM);
 
+
+    // This kernel reads Q[p, head_i] and populates O[p, head_i].
     const int head_i = blockIdx.x;
     const int p      = blockIdx.y;
-    const int tid    = threadIdx.x;
-    const int g      = head_i / (n_heads / n_kv_heads);
-    const float scale = rsqrtf((float)h_d);
+    const __nv_bfloat16 *q_row = Q + p * (N_HEADS * H_DIM) + head_i * H_DIM;
+    __nv_bfloat16 *o_row = O + p * (N_HEADS * H_DIM) + head_i * H_DIM;
 
-    const __nv_bfloat16 *q_row = Q + p * (n_heads * h_d) + head_i * h_d;
+    // Group of K/V heads associated to this Q head.
+    const int g      = head_i / (N_HEADS / N_KV_HEADS);
 
-    // Stage 0: stage Q[p, head_i, :] into shared memory.
-    for (int d = tid; d < h_d; d += BLOCK_SIZE) {
-        q_shared[d] = q_row[d];
+    // Stage 0: Read Q[p, head_i] into shared memory
+    __shared__ float q_shared[H_DIM];
+    for (int d = tid; d < H_DIM; d += BLOCK_SIZE) {
+        q_shared[d] = __bfloat162float(q_row[d]);
     }
     __syncthreads();
 
     // Stage 1: scaled dot-product Q_i[p] · K_g[q]^T and causal mask.
-    // q > p positions get -1e6f (≈ -∞ for softmax) per part2.pdf §3.2.
     for (int q = tid; q < s; q += BLOCK_SIZE) {
-        if (q > p) {
-            scores[q] = __float2bfloat16(-1.0e6f);
-        } else {
-            const __nv_bfloat16 *k_row = K + q * (n_kv_heads * h_d) + g * h_d;
-            float dot = 0.0f;
-            for (int d = 0; d < h_d; ++d) {
-                dot += __bfloat162float(q_shared[d]) * __bfloat162float(k_row[d]);
-            }
-            scores[q] = __float2bfloat16(dot * scale);
+        const __nv_bfloat16 *k_row = K + q * (N_KV_HEADS * H_DIM) + g * H_DIM;
+        float dot = 0.0f;
+        for (int d = 0; d < H_DIM; ++d) {
+            dot += q_shared[d] * __bfloat162float(k_row[d]);
         }
+        float mask = (q > p) ? -1.0e6f : 0.0f; // NB WANT TO ASK ABT THIS ONE!
+        scores[q] = dot * scale + mask;
     }
     __syncthreads();
 
-    // Stage 2: row max via shared-memory tree reduction (PMPP pattern). Per
-    // thread we accumulate the local max in an FP32 register, then reduce
-    // through BF16 shared memory — each smem read converts to FP32, max in
-    // register, write BF16 back.
+    // Stage 2: find row max using the rmsnorm reduction pattern from earlier
     float local_max = -INFINITY;
     for (int q = tid; q < s; q += BLOCK_SIZE) {
-        float v = __bfloat162float(scores[q]);
+        float v = scores[q];
         if (v > local_max) local_max = v;
     }
-    reduce_scratch[tid] = __float2bfloat16(local_max);
+    reduce_scratch[tid] = local_max;
     __syncthreads();
     for (int stride = BLOCK_SIZE / 2; stride > 0; stride >>= 1) {
         if (tid < stride) {
-            float a = __bfloat162float(reduce_scratch[tid]);
-            float b = __bfloat162float(reduce_scratch[tid + stride]);
-            reduce_scratch[tid] = __float2bfloat16(a > b ? a : b);
+            float a = reduce_scratch[tid];
+            float b = reduce_scratch[tid + stride];
+            reduce_scratch[tid] = a > b ? a : b;
         }
         __syncthreads();
     }
-    __shared__ __nv_bfloat16 row_max_bf16;
-    if (tid == 0) row_max_bf16 = reduce_scratch[0];
-    __syncthreads();
-    float row_max = __bfloat162float(row_max_bf16);
 
-    // Stage 3: exponentiate in place (subtract row max first — required for
-    // numerical stability per part2.pdf §4) and reduce to row sum. FP32 exp
-    // and FP32 register accumulator; BF16 store back to scores.
+
+    __syncthreads();
+    float row_max = reduce_scratch[0];
+
+    // Stage 3 softmax
     float local_sum = 0.0f;
     for (int q = tid; q < s; q += BLOCK_SIZE) {
-        float e = expf(__bfloat162float(scores[q]) - row_max);
-        scores[q] = __float2bfloat16(e);
+        float e = expf(scores[q] - row_max);
+        scores[q] = e;
         local_sum += e;
     }
-    reduce_scratch[tid] = __float2bfloat16(local_sum);
+    reduce_scratch[tid] = local_sum;
     __syncthreads();
     for (int stride = BLOCK_SIZE / 2; stride > 0; stride >>= 1) {
         if (tid < stride) {
-            float a = __bfloat162float(reduce_scratch[tid]);
-            float b = __bfloat162float(reduce_scratch[tid + stride]);
-            reduce_scratch[tid] = __float2bfloat16(a + b);
+            reduce_scratch[tid] += reduce_scratch[tid + stride];
         }
         __syncthreads();
     }
-    __shared__ __nv_bfloat16 row_sum_bf16;
-    if (tid == 0) row_sum_bf16 = reduce_scratch[0];
     __syncthreads();
-    float row_sum = __bfloat162float(row_sum_bf16);
+    float row_sum = reduce_scratch[0];
 
     // Stage 4: weighted sum O[p, head_i, d] = Σ_q (scores[q] / row_sum) · V[q, g, d].
+    // Skip q > p — those scores are effectively zero after the mask + exp.
     const float inv_sum = 1.0f / row_sum;
-    __nv_bfloat16 *o_row = O + p * (n_heads * h_d) + head_i * h_d;
-    for (int d = tid; d < h_d; d += BLOCK_SIZE) {
+
+    for (int d = tid; d < H_DIM; d += BLOCK_SIZE) {
         float acc = 0.0f;
         for (int q = 0; q <= p; ++q) {
-            const __nv_bfloat16 *v_row = V + q * (n_kv_heads * h_d) + g * h_d;
-            acc += __bfloat162float(scores[q]) * __bfloat162float(v_row[d]);
+            const __nv_bfloat16 *v_row = V + q * (N_KV_HEADS * H_DIM) + g * H_DIM;
+            acc += scores[q] * __bfloat162float(v_row[d]);
         }
         o_row[d] = __float2bfloat16(acc * inv_sum);
     }
@@ -124,10 +108,9 @@ __global__ void gqa_attention_kernel(const __nv_bfloat16 *Q,
 
 void launch_gqa_attention(const __nv_bfloat16 *d_Q, const __nv_bfloat16 *d_K,
                           const __nv_bfloat16 *d_V, __nv_bfloat16 *d_O,
-                          int n_heads, int n_kv_heads, int s, int h_d) {
-    size_t smem_bytes = sizeof(__nv_bfloat16) * (h_d + s + BLOCK_SIZE);
-    dim3 grid(n_heads, s);
+                          int s) {
+    assert(s <= MAX_SEQ_LEN);
+    dim3 grid(N_HEADS, s);
     dim3 block(BLOCK_SIZE);
-    gqa_attention_kernel<<<grid, block, smem_bytes>>>(
-        d_Q, d_K, d_V, d_O, n_heads, n_kv_heads, s, h_d);
+    gqa_attention_kernel<<<grid, block>>>(d_Q, d_K, d_V, d_O, s);
 }

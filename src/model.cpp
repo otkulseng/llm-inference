@@ -73,6 +73,7 @@ string Model::detokenize(const vector<int> &ids) {
 vector<float> Model::embed(const vector<int> &ids) {
     // GPU gather on the cached embed table; convert to fp32 for the caller.
     int n = (int)ids.size();
+    assert(n <= MAX_SEQ_LEN);
     DeviceBuffer<int> d_ids(ids);
     DeviceBuffer<__nv_bfloat16> d_out(n * EMBEDDING_DIM);
     launch_embed_gather(embed_.data(), d_ids.data(), d_out.data(),
@@ -127,7 +128,7 @@ DeviceBuffer<__nv_bfloat16> Model::run_decoder_block(
 
     DeviceBuffer<__nv_bfloat16> d_O(s * N_HEADS * H_DIM);
     launch_gqa_attention(d_Q_rope.data(), d_K_rope.data(), d_V.data(),
-                         d_O.data(), N_HEADS, N_KV_HEADS, s, H_DIM);
+                         d_O.data(), s);
 
     DeviceBuffer<__nv_bfloat16> d_attn_out(s * EMBEDDING_DIM);
     launch_matmul(d_O.data(), w.o.data(), d_attn_out.data(),
@@ -171,6 +172,7 @@ Model::run_swiglu_core(const DeviceBuffer<__nv_bfloat16> &d_x_norm,
 
 vector<float> Model::swiglu_ffn(const vector<float> &x_norm, int layer_idx,
                                 int s) {
+    assert(s <= MAX_SEQ_LEN);
     DeviceBuffer<__nv_bfloat16> d_x(to_bf16_host(x_norm));
     DeviceBuffer<__nv_bfloat16> d_out =
         run_swiglu_core(d_x, layers_[layer_idx], s);
@@ -179,6 +181,7 @@ vector<float> Model::swiglu_ffn(const vector<float> &x_norm, int layer_idx,
 
 vector<float> Model::decoder_block(const vector<float> &x, int layer_idx,
                                    int s) {
+    assert(s <= MAX_SEQ_LEN);
     const LayerWeights &w = layers_[layer_idx];
     auto [d_cos, d_sin] = make_rope_tables(s, H_DIM);
     DeviceBuffer<__nv_bfloat16> d_x(to_bf16_host(x));
@@ -190,6 +193,7 @@ vector<float> Model::decoder_block(const vector<float> &x, int layer_idx,
 
 int Model::forward_one_step(const vector<int> &token_ids) {
     int s = (int)token_ids.size();
+    assert(s <= MAX_SEQ_LEN);
 
     // 1. Embedding lookup via GPU gather on the cached embed table.
     DeviceBuffer<int> d_ids(token_ids);
@@ -229,6 +233,7 @@ int Model::forward_one_step(const vector<int> &token_ids) {
 }
 
 vector<int> Model::generate(const vector<int> &token_ids, int n_new) {
+    assert((int)token_ids.size() + n_new <= MAX_SEQ_LEN);
     vector<int> all = token_ids;
     vector<int> out;
     out.reserve(n_new);

@@ -121,8 +121,7 @@ vector<float> TestAPI::gqa_attention(const vector<float> &Q,
     DeviceBuffer<__nv_bfloat16> d_V(to_bf16_host(V_shd));
     DeviceBuffer<__nv_bfloat16> d_O(s * N_HEADS * H_DIM);
 
-    launch_gqa_attention(d_Q.data(), d_K.data(), d_V.data(), d_O.data(),
-                         N_HEADS, N_KV_HEADS, s, H_DIM);
+    launch_gqa_attention(d_Q.data(), d_K.data(), d_V.data(), d_O.data(), s);
 
     return to_fp32_host(d_O.to_host());
 }

@@ -39,11 +39,13 @@ void launch_rope(const __nv_bfloat16 *d_qk, const __nv_bfloat16 *d_cos,
                  int n_heads, int s, int h_d);
 
 // Grouped Query Attention with causal mask and numerically stable softmax.
-// Q is flat (s, n_heads, h_d); K, V are (s, n_kv_heads, h_d); output is
-// (s, n_heads, h_d) = (s, n_heads * h_d). KV head index = i / (n_heads/n_kv_heads).
+// Q is flat (s, N_HEADS, H_DIM); K, V are (s, N_KV_HEADS, H_DIM); output is
+// (s, N_HEADS, H_DIM) = (s, N_HEADS * H_DIM). KV head index = i / (N_HEADS/N_KV_HEADS).
+// Architecture constants from config.h (N_HEADS=32, N_KV_HEADS=8, H_DIM=128)
+// are baked into the kernel; only the runtime-varying s is passed.
 void launch_gqa_attention(const __nv_bfloat16 *d_Q, const __nv_bfloat16 *d_K,
                           const __nv_bfloat16 *d_V, __nv_bfloat16 *d_O,
-                          int n_heads, int n_kv_heads, int s, int h_d);
+                          int s);
 
 // Embedding lookup: out[t, :] = table[token_ids[t], :]. table is (V, d) BF16,
 // out is (n_tokens, d) BF16. token_ids is host-allocated int but copied to GPU.

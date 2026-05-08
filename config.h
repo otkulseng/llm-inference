@@ -16,3 +16,8 @@ const int VOCAB_SIZE = 128256;
 const int N_LAYERS = 32;
 const float RMS_NORM_EPSILON = 1e-5f;
 const float ROPE_BASE = 500000.0f;  // Llama 3 uses 500000, NOT 10000 like the original RoPE paper.
+
+// Per part2.pdf §2.1: "You may assume the input sequence length does not
+// exceed 1000 tokens." Used as the static cap for any per-block buffer that
+// scales with sequence length (e.g. the GQA score row).
+const int MAX_SEQ_LEN = 1000;
