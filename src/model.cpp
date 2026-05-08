@@ -47,7 +47,7 @@ make_rope_tables(int s, int h_d) {
 // Model
 // ---------------------------------------------------------------------------
 
-Model::Model() : loader_(DumpFloatType::FP32) {
+Model::Model() : loader_(DumpFloatType::FP32), tokenizer_(TOKENIZER_PATH) {
     // Eager load of every weight. ~16 GB BF16 total, fits in the 20 GB MIG.
     embed_ = bulk_load_to_gpu(loader_,
                               "assets/llama3/blobs/model.embed_tokens.weight",
@@ -63,13 +63,11 @@ Model::Model() : loader_(DumpFloatType::FP32) {
 }
 
 vector<int> Model::tokenize(const string &input) {
-    BPETokenizer tok(TOKENIZER_PATH);
-    return tok.encode(input);
+    return tokenizer_.encode(input);
 }
 
 string Model::detokenize(const vector<int> &ids) {
-    BPETokenizer tok(TOKENIZER_PATH);
-    return tok.decode(ids);
+    return tokenizer_.decode(ids);
 }
 
 vector<float> Model::embed(const vector<int> &ids) {
@@ -103,9 +101,6 @@ Model::LayerWeights Model::load_layer(int layer_idx) {
     };
 }
 
-// One decoder block on GPU. Operator order per part2.pdf §3.1:
-//   rmsnorm -> q/k/v -> rope -> gqa -> o_proj -> residual ->
-//   rmsnorm -> swiglu -> residual.
 DeviceBuffer<__nv_bfloat16> Model::run_decoder_block(
     const DeviceBuffer<__nv_bfloat16> &d_x, const LayerWeights &w,
     const __nv_bfloat16 *d_cos, const __nv_bfloat16 *d_sin, int s) {
@@ -118,11 +113,11 @@ DeviceBuffer<__nv_bfloat16> Model::run_decoder_block(
     DeviceBuffer<__nv_bfloat16> d_Q(s * N_HEADS    * H_DIM);
     DeviceBuffer<__nv_bfloat16> d_K(s * N_KV_HEADS * H_DIM);
     DeviceBuffer<__nv_bfloat16> d_V(s * N_KV_HEADS * H_DIM);
-    launch_matmul_xwt(d_xnorm.data(), w.q.data(), d_Q.data(),
+    launch_matmul(d_xnorm.data(), w.q.data(), d_Q.data(),
                       s, EMBEDDING_DIM, N_HEADS    * H_DIM);
-    launch_matmul_xwt(d_xnorm.data(), w.k.data(), d_K.data(),
+    launch_matmul(d_xnorm.data(), w.k.data(), d_K.data(),
                       s, EMBEDDING_DIM, N_KV_HEADS * H_DIM);
-    launch_matmul_xwt(d_xnorm.data(), w.v.data(), d_V.data(),
+    launch_matmul(d_xnorm.data(), w.v.data(), d_V.data(),
                       s, EMBEDDING_DIM, N_KV_HEADS * H_DIM);
 
     DeviceBuffer<__nv_bfloat16> d_Q_rope(s * N_HEADS    * H_DIM);
@@ -135,7 +130,7 @@ DeviceBuffer<__nv_bfloat16> Model::run_decoder_block(
                          d_O.data(), N_HEADS, N_KV_HEADS, s, H_DIM);
 
     DeviceBuffer<__nv_bfloat16> d_attn_out(s * EMBEDDING_DIM);
-    launch_matmul_xwt(d_O.data(), w.o.data(), d_attn_out.data(),
+    launch_matmul(d_O.data(), w.o.data(), d_attn_out.data(),
                       s, N_HEADS * H_DIM, EMBEDDING_DIM);
 
     DeviceBuffer<__nv_bfloat16> d_x1(s * EMBEDDING_DIM);
@@ -147,17 +142,7 @@ DeviceBuffer<__nv_bfloat16> Model::run_decoder_block(
     launch_rmsnorm(d_x1.data(), w.post_norm.data(), d_x1_norm.data(),
                    s, EMBEDDING_DIM, RMS_NORM_EPSILON);
 
-    DeviceBuffer<__nv_bfloat16> d_gate(s * D_FF);
-    DeviceBuffer<__nv_bfloat16> d_up(s * D_FF);
-    DeviceBuffer<__nv_bfloat16> d_hidden(s * D_FF);
-    DeviceBuffer<__nv_bfloat16> d_ffn_out(s * EMBEDDING_DIM);
-    launch_matmul_xwt(d_x1_norm.data(), w.gate.data(), d_gate.data(),
-                      s, EMBEDDING_DIM, D_FF);
-    launch_matmul_xwt(d_x1_norm.data(), w.up.data(),   d_up.data(),
-                      s, EMBEDDING_DIM, D_FF);
-    launch_silu_mul(d_gate.data(), d_up.data(), d_hidden.data(), s * D_FF);
-    launch_matmul_xwt(d_hidden.data(), w.down.data(), d_ffn_out.data(),
-                      s, D_FF, EMBEDDING_DIM);
+    DeviceBuffer<__nv_bfloat16> d_ffn_out = run_swiglu_core(d_x1_norm, w, s);
 
     DeviceBuffer<__nv_bfloat16> d_x2(s * EMBEDDING_DIM);
     launch_residual_add(d_x1.data(), d_ffn_out.data(), d_x2.data(),
@@ -166,24 +151,29 @@ DeviceBuffer<__nv_bfloat16> Model::run_decoder_block(
     return d_x2;
 }
 
-vector<float> Model::swiglu_ffn(const vector<float> &x_norm, int layer_idx,
-                                int s) {
-    const LayerWeights &w = layers_[layer_idx];
-
-    DeviceBuffer<__nv_bfloat16> d_x(to_bf16_host(x_norm));
+DeviceBuffer<__nv_bfloat16>
+Model::run_swiglu_core(const DeviceBuffer<__nv_bfloat16> &d_x_norm,
+                       const LayerWeights &w, int s) {
     DeviceBuffer<__nv_bfloat16> d_gate(s * D_FF);
     DeviceBuffer<__nv_bfloat16> d_up(s * D_FF);
     DeviceBuffer<__nv_bfloat16> d_hidden(s * D_FF);
     DeviceBuffer<__nv_bfloat16> d_out(s * EMBEDDING_DIM);
 
-    launch_matmul_xwt(d_x.data(),   w.gate.data(), d_gate.data(),
+    launch_matmul(d_x_norm.data(), w.gate.data(), d_gate.data(),
                       s, EMBEDDING_DIM, D_FF);
-    launch_matmul_xwt(d_x.data(),   w.up.data(),   d_up.data(),
+    launch_matmul(d_x_norm.data(), w.up.data(), d_up.data(),
                       s, EMBEDDING_DIM, D_FF);
     launch_silu_mul(d_gate.data(), d_up.data(), d_hidden.data(), s * D_FF);
-    launch_matmul_xwt(d_hidden.data(), w.down.data(), d_out.data(),
+    launch_matmul(d_hidden.data(), w.down.data(), d_out.data(),
                       s, D_FF, EMBEDDING_DIM);
+    return d_out;
+}
 
+vector<float> Model::swiglu_ffn(const vector<float> &x_norm, int layer_idx,
+                                int s) {
+    DeviceBuffer<__nv_bfloat16> d_x(to_bf16_host(x_norm));
+    DeviceBuffer<__nv_bfloat16> d_out =
+        run_swiglu_core(d_x, layers_[layer_idx], s);
     return to_fp32_host(d_out.to_host());
 }
 
@@ -224,7 +214,7 @@ int Model::forward_one_step(const vector<int> &token_ids) {
     //    token before lm_head). 1×d row times W_lm^T (V×d row-major) → (1, V).
     DeviceBuffer<__nv_bfloat16> d_logits(VOCAB_SIZE);
     const __nv_bfloat16 *d_x_last = d_x_norm.data() + (s - 1) * EMBEDDING_DIM;
-    launch_matmul_xwt(d_x_last, lm_head_.data(), d_logits.data(),
+    launch_matmul(d_x_last, lm_head_.data(), d_logits.data(),
                       1, EMBEDDING_DIM, VOCAB_SIZE);
 
     // 6. Greedy argmax on host.

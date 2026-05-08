@@ -3,6 +3,7 @@
 #include "device_buffer.h"
 #include "loader.h"
 #include "prelude.h"
+#include "tokenizer.h"
 #include <cuda_bf16.h>
 
 // Llama-3-8B inference engine. All persistent storage is __nv_bfloat16; FP32
@@ -41,10 +42,20 @@ class Model {
                       const LayerWeights &w,
                       const __nv_bfloat16 *d_cos, const __nv_bfloat16 *d_sin,
                       int s);
+    // Core SwiGLU FFN: gate/up/silu_mul/down on an already-normalized input.
+    // Shared by run_decoder_block (FFN sub-block) and swiglu_ffn (test API).
+    DeviceBuffer<__nv_bfloat16>
+    run_swiglu_core(const DeviceBuffer<__nv_bfloat16> &d_x_norm,
+                    const LayerWeights &w, int s);
 
     // loader_ must be declared before any cache so it's constructed first
     // (the cache loads use it during the constructor body).
     LlamaDumpLoader loader_;
+    BPETokenizer tokenizer_;
+    // NOTE: part2.pdf §4 says lm_head and embed_tokens are tied in Llama 3;
+    // that's true for Llama 1/2 but the actual Llama-3-8B-Instruct config has
+    // tie_word_embeddings: false (verified). The two tensors differ, so we
+    // hold both. ~2 GB total.
     DeviceBuffer<__nv_bfloat16> embed_;       // (V, d)
     vector<LayerWeights> layers_;             // 32
     DeviceBuffer<__nv_bfloat16> final_norm_;  // (d,)

@@ -1,10 +1,5 @@
 #include "kernels.cuh"
 
-// Elementwise SiLU(gate) * up:  y[i] = (gate[i] / (1 + exp(-gate[i]))) * up[i].
-// Per part2.pdf §3.2: "Implement the SiLU(gate) ⊙ up step as a simple CUDA
-// kernel with one thread per element." BF16 in/out, FP32 in registers (exp
-// needs FP32 for stability).
-
 constexpr int BLOCK_SIZE = 256;
 
 __global__ void silu_mul_kernel(const __nv_bfloat16 *gate,

@@ -24,11 +24,17 @@ vector<float> TestAPI::get_embeddings(vector<int> token_ids) {
 
 vector<float> TestAPI::matmul(const vector<float> &A, const vector<float> &B,
                               int M, int K, int N) {
+    // Matmul calculates A @ B^T. Transpose beforehand
+    vector<float> Bt(N * K);
+    for (int k = 0; k < K; ++k)
+        for (int n = 0; n < N; ++n)
+            Bt[n * K + k] = B[k * N + n];
+
     DeviceBuffer<__nv_bfloat16> d_A(to_bf16_host(A));
-    DeviceBuffer<__nv_bfloat16> d_B(to_bf16_host(B));
+    DeviceBuffer<__nv_bfloat16> d_Bt(to_bf16_host(Bt));
     DeviceBuffer<__nv_bfloat16> d_C(M * N);
 
-    launch_matmul(d_A.data(), d_B.data(), d_C.data(), M, K, N);
+    launch_matmul(d_A.data(), d_Bt.data(), d_C.data(), M, K, N);
 
     return to_fp32_host(d_C.to_host());
 }

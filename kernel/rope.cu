@@ -1,24 +1,5 @@
 #include "kernels.cuh"
 
-// Rotary Positional Embeddings.
-//
-// Buffer layout: flat (s, n_heads, h_d) row-major — the natural post-matmul
-// layout produced by the Q/K projections, so decoder_block consumes it with
-// zero data movement (per part2.pdf §3.1's "logical reshape ... requires no
-// data movement"). Test 11's fixture is in (n_heads, s, h_d); the test
-// wrapper transposes once on the host.
-//
-// For each head, each token p, and each pair index i in [0, h_d/2):
-//     q'[i]         =  cos(p*theta_i) * q[i]         - sin(p*theta_i) * q[i + h_d/2]
-//     q'[i + h_d/2] =  sin(p*theta_i) * q[i]         + cos(p*theta_i) * q[i + h_d/2]
-//
-// This is the "rotate_half" convention from the HuggingFace Llama
-// implementation: pair dim i with dim i+h_d/2, NOT i with i+1.
-//
-// cos_table and sin_table are pre-computed (s, h_d/2) row-major BF16 (computed
-// on host as fp32, downcast at upload). All compute is in FP32 registers; the
-// stored q outputs are BF16.
-
 constexpr int BLOCK_SIZE = 256;
 
 __global__ void rope_kernel(const __nv_bfloat16 *qk,

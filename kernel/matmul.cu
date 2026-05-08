@@ -1,45 +1,40 @@
 #include "kernels.cuh"
 
-// Tiled matrix multiplication: C[M,N] = A[M,K] * B[K,N], all row-major BF16.
-// Per-thread FP32 accumulator over BF16 inputs. Shared-memory tiles stay BF16
-// (no FP32 buffers of any kind); the inner loop reads BF16 from smem and
-// converts to float in registers per multiply.
-
 #define TILE_SIZE 32
 
-__global__ void matmul_tiled(const __nv_bfloat16 *A, const __nv_bfloat16 *B,
+// Tiled coalesced matmul for X · W^T.
+__global__ void matmul_tiled(const __nv_bfloat16 *X, const __nv_bfloat16 *W,
                              __nv_bfloat16 *C, int M, int K, int N) {
+    __shared__ float sX[TILE_SIZE][TILE_SIZE];
+    __shared__ float sW[TILE_SIZE][TILE_SIZE];  // stored as sW[k_local][n_local]
 
-    __shared__ __nv_bfloat16 sA[TILE_SIZE][TILE_SIZE];
-    __shared__ __nv_bfloat16 sB[TILE_SIZE][TILE_SIZE];
-
-    int row = blockIdx.y * TILE_SIZE + threadIdx.y;
-    int col = blockIdx.x * TILE_SIZE + threadIdx.x;
+    int row = blockIdx.y * TILE_SIZE + threadIdx.y;  // m
+    int col = blockIdx.x * TILE_SIZE + threadIdx.x;  // n
 
     float sum = 0.0f;
-
     int num_tiles = (K + TILE_SIZE - 1) / TILE_SIZE;
 
     for (int t = 0; t < num_tiles; t++) {
-        int a_col = t * TILE_SIZE + threadIdx.x;
-        if (row < M && a_col < K) {
-            sA[threadIdx.y][threadIdx.x] = A[row * K + a_col];
-        } else {
-            sA[threadIdx.y][threadIdx.x] = __float2bfloat16(0.0f);
-        }
-        int b_row = t * TILE_SIZE + threadIdx.y;
-        if (b_row < K && col < N) {
-            sB[threadIdx.y][threadIdx.x] = B[b_row * N + col];
-        } else {
-            sB[threadIdx.y][threadIdx.x] = __float2bfloat16(0.0f);
-        }
+        // X tile: standard row-major load. sX[m_local][k_local].
+        int x_k = t * TILE_SIZE + threadIdx.x;
+        sX[threadIdx.y][threadIdx.x] = (row < M && x_k < K)
+            ? __bfloat162float(X[row * K + x_k])
+            : 0.0f;
+
+        // W tile: W is stored (N, K). To stay coalesced we let lanes (varying
+        // threadIdx.x) walk along K — the contiguous stride. We then store
+        // transposed into smem so the inner loop reads sW[k_local][n_local]
+        // with the same access pattern as a standard matmul.
+        int w_n = blockIdx.x * TILE_SIZE + threadIdx.y;
+        int w_k = t * TILE_SIZE + threadIdx.x;
+        sW[threadIdx.x][threadIdx.y] = (w_n < N && w_k < K)
+            ? __bfloat162float(W[w_n * K + w_k])
+            : 0.0f;
 
         __syncthreads();
 
         for (int i = 0; i < TILE_SIZE; i++) {
-            float a = __bfloat162float(sA[threadIdx.y][i]);
-            float b = __bfloat162float(sB[i][threadIdx.x]);
-            sum += a * b;
+            sum += sX[threadIdx.y][i] * sW[i][threadIdx.x];
         }
         __syncthreads();
     }
@@ -48,11 +43,10 @@ __global__ void matmul_tiled(const __nv_bfloat16 *A, const __nv_bfloat16 *B,
     }
 }
 
-void launch_matmul(const __nv_bfloat16 *d_A, const __nv_bfloat16 *d_B,
+void launch_matmul(const __nv_bfloat16 *d_X, const __nv_bfloat16 *d_W,
                    __nv_bfloat16 *d_C, int M, int K, int N) {
     dim3 block(TILE_SIZE, TILE_SIZE);
     dim3 grid((N + TILE_SIZE - 1) / TILE_SIZE,
               (M + TILE_SIZE - 1) / TILE_SIZE);
-
-    matmul_tiled<<<grid, block>>>(d_A, d_B, d_C, M, K, N);
+    matmul_tiled<<<grid, block>>>(d_X, d_W, d_C, M, K, N);
 }

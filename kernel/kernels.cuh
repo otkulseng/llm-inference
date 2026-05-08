@@ -11,15 +11,12 @@
 // rmsnorm sum-of-squares) but no FP32 buffer ever touches global or shared
 // memory.
 
-// Tiled matrix multiplication: C[M,N] = A[M,K] * B[K,N], all row-major BF16.
-// FP32 accumulator in registers; BF16 store at end.
-void launch_matmul(const __nv_bfloat16 *d_A, const __nv_bfloat16 *d_B,
+// Tiled matmul: C[M,N] = X[M,K] · W^T, where W is (N, K) row-major (the
+// HuggingFace (out_dim, in_dim) checkpoint layout — see part2.pdf §4). Every
+// matmul in the model is of this form (Q/K/V/O projections, gate/up/down,
+// lm_head). FP32 accumulator in registers; BF16 store at end.
+void launch_matmul(const __nv_bfloat16 *d_X, const __nv_bfloat16 *d_W,
                    __nv_bfloat16 *d_C, int M, int K, int N);
-
-// Matmul with B stored transposed: C[M,N] = A[M,K] * B^T, where B is given
-// as (N, K) row-major. Used for X @ W^T where W is (out, in) per HuggingFace.
-void launch_matmul_xwt(const __nv_bfloat16 *d_A, const __nv_bfloat16 *d_B,
-                       __nv_bfloat16 *d_C, int M, int K, int N);
 
 // Row-wise RMSNorm: y[r, i] = x[r, i] * gamma[i] / sqrt(mean(x[r, :]^2) + eps).
 // x and y are flat (s, d) row-major; gamma is (d,). All BF16.
